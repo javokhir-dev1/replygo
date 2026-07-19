@@ -1,0 +1,398 @@
+import { Injectable, Logger, Inject } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
+import type IORedis from 'ioredis';
+import { InstagramService, IgCredentials } from '../instagram/instagram.service';
+import { IgRateLimitError } from '../instagram/ig-errors';
+import { IgCredsProvider } from '../config/ig-creds.provider';
+import { AutomationsService } from '../automations/automations.service';
+import { LogsService } from '../logs/logs.service';
+import { RateLimitService } from '../rate-limit/rate-limit.service';
+import { COMMENTS_QUEUE, MESSAGING_QUEUE, JOB_COMMENT, JOB_MESSAGING, IG_REDIS } from './queue.constants';
+
+const MIN_DELAY_MS = 5_000;
+const MAX_DELAY_MS = 10_000;
+
+// Obuna-tekshirish matnlari uchun standart qiymatlar (entity default o'rniga)
+const DEF_ASK_MSG = "Ma'lumotni olish uchun quyidagi tugmani bosing 👇";
+const DEF_ASK_BTN = "Ma'lumotni olish";
+const DEF_FAIL_MSG =
+  "Siz hali obuna bo'lmagansiz. Iltimos, avval sahifamizga obuna bo'ling, keyin tugmani bosing.";
+const DEF_FAIL_BTN = "Obuna bo'ldim ✅";
+
+@Injectable()
+export class WebhookService {
+  private readonly logger = new Logger(WebhookService.name);
+
+  constructor(
+    private readonly config: ConfigService,
+    private readonly instagram: InstagramService,
+    private readonly credsProvider: IgCredsProvider,
+    private readonly automations: AutomationsService,
+    private readonly logs: LogsService,
+    private readonly rateLimit: RateLimitService,
+    @InjectQueue(COMMENTS_QUEUE) private readonly commentsQueue: Queue,
+    @InjectQueue(MESSAGING_QUEUE) private readonly messagingQueue: Queue,
+    @Inject(IG_REDIS) private readonly redis: IORedis,
+  ) {}
+
+  /**
+   * Idempotentlik: bitta amalni (masalan bir kommentga javob) faqat BIR marta bajaradi.
+   * fn() muvaffaqiyatli tugasa marker qo'yiladi. Agar fn() rate-limit (429) tashlasa,
+   * marker qo'yilmaydi → job qayta urinsa, amal qayta bajariladi (dublikatsiz).
+   * Boshqa xatolar fn() ichida ushlab, log qilinadi (retry qilinmaydi).
+   */
+  private async runOnce(key: string, ttlSec: number, fn: () => Promise<void>): Promise<boolean> {
+    try {
+      if (await this.redis.exists(key)) return false; // allaqachon bajarilgan
+    } catch (e: any) {
+      // Redis o'qishda xato bo'lsa ham amalni bajaramiz (faqat log)
+      this.logger.warn(`Idempotency o'qishda xato: ${e.message}`);
+    }
+    await fn(); // 429 bo'lsa bu yerdan throw bo'ladi (marker qo'yilmaydi)
+    try {
+      await this.redis.set(key, '1', 'EX', ttlSec);
+    } catch {
+      /* marker yozilmasa ham kritik emas */
+    }
+    return true;
+  }
+
+  private get jobOpts() {
+    return {
+      attempts: +(this.config.get('QUEUE_ATTEMPTS') ?? 3),
+      backoff: { type: 'exponential' as const, delay: 5_000 },
+      // Bajarilgan/xato joblarni cheklangan miqdorda saqlaymiz (dedup oynasi + tozalik)
+      removeOnComplete: 1_000,
+      removeOnFail: 5_000,
+    };
+  }
+
+  private pickRandom(templates: string[]): string | null {
+    const valid = (templates || []).filter((t) => t?.trim());
+    if (!valid.length) return null;
+    return valid[Math.floor(Math.random() * valid.length)];
+  }
+
+  /**
+   * Webhook entry'sini NAVBATGA qo'shadi (to'g'ridan-to'g'ri ishlamaydi).
+   * Shu bilan: rate limit, retry, concurrency nazorati va restart'ga chidamlilik ta'minlanadi.
+   */
+  async enqueueEntry(entry: any) {
+    const botAccountId = this.credsProvider.accountId;
+
+    // Bitta userli rejim: faqat sozlangan akkauntga tegishli entrylarni qabul qilamiz
+    if (entry.id && botAccountId && entry.id !== botAccountId) {
+      this.logger.warn(`Webhook: begona akkaunt entry (${entry.id}), e'tiborsiz`);
+      return;
+    }
+
+    // Kommentlar (changes)
+    if (Array.isArray(entry.changes)) {
+      for (const change of entry.changes) {
+        if (change.field === 'comments' && change.value?.id) {
+          // Kommentlar navbatiga (sekin/xavfsiz worker).
+          // jobId = comment id → Meta qayta yuborsa dublikat job yaratilmaydi.
+          await this.commentsQueue.add(JOB_COMMENT, change.value, {
+            ...this.jobOpts,
+            jobId: `comment:${change.value.id}`,
+          });
+        } else {
+          this.logger.log(`Webhook: '${change.field}' field (ishlanmaydi), e'tiborsiz`);
+        }
+      }
+    }
+
+    // Xabarlar / tugma bosishlari (messaging) — obunani tekshirish oqimi uchun
+    if (Array.isArray(entry.messaging)) {
+      for (const msg of entry.messaging) {
+        const mid = msg.message?.mid;
+        const dedup = mid
+          ? `msg:${mid}`
+          : `msg:${msg.sender?.id}:${msg.timestamp}:${msg.postback?.payload || msg.message?.quick_reply?.payload || ''}`;
+        // DM navbatiga (tez/mustaqil worker) — komment yuklamasidan ta'sirlanmaydi.
+        await this.messagingQueue.add(JOB_MESSAGING, msg, {
+          ...this.jobOpts,
+          jobId: dedup,
+        });
+      }
+    }
+
+    if (!Array.isArray(entry.changes) && !Array.isArray(entry.messaging)) {
+      this.logger.warn(`Webhook: changes/messaging yo'q. Entry: ${JSON.stringify(entry)}`);
+    }
+  }
+
+  /** Quick reply / postback tugma bosilganda — obunani tekshirish (processor chaqiradi) */
+  async handleMessaging(msg: any) {
+    const creds: IgCredentials = this.credsProvider.creds;
+    const botAccountId = this.credsProvider.accountId;
+    const senderId: string = msg.sender?.id;
+
+    // O'zimiz yuborgan (echo) yoki botning o'z xabarlarini e'tiborsiz qoldiramiz
+    if (msg.message?.is_echo) return;
+    if (senderId && senderId === botAccountId) return;
+
+    const payload: string | undefined =
+      msg.message?.quick_reply?.payload || msg.postback?.payload;
+
+    // Faqat obuna-tekshirish payloadlari bilan ishlaymiz; oddiy DMlarga tegmaymiz
+    if (!payload || !payload.startsWith('FOLLOWCHECK:') || !senderId) return;
+
+    const autoId = Number(payload.split(':')[1]);
+    if (!autoId) return;
+
+    let auto: any;
+    try {
+      auto = await this.automations.findOne(autoId);
+    } catch {
+      this.logger.warn(`Obuna tekshiruvi: avtomatizatsiya #${autoId} topilmadi`);
+      return;
+    }
+    if (!auto || !auto.isActive || !auto.followCheckEnabled) return;
+
+    // Profil + obuna holati (foydalanuvchi endi bizga xabar yozgani uchun mavjud)
+    let profile: { username?: string; is_user_follow_business?: boolean };
+    try {
+      profile = await this.instagram.getUserProfile(creds, senderId);
+    } catch (err: any) {
+      if (err instanceof IgRateLimitError) throw err; // navbatni pauza qilib retry
+      const igErr = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      this.logger.error(`[Obuna tekshiruvi xato] ${igErr}`);
+      return;
+    }
+
+    const name = profile.username || 'foydalanuvchi';
+
+    if (profile.is_user_follow_business === true) {
+      // Obuna tasdiqlandi → asosiy DM yuboramiz (bir marta)
+      await this.runOnce(`main:${senderId}:${auto.id}`, 24 * 3600, async () => {
+        await this.sendMainDm(creds, senderId, auto, name, '');
+        this.logger.log(`✅ Obuna tasdiqlandi, asosiy DM yuborildi @${name}`);
+      });
+    } else {
+      // Obuna emas → qayta so'rov + "Obuna bo'ldim" tugmasi.
+      // Qisqa TTL: retry dublikatini oldini oladi, lekin keyinroq qayta so'rashga ruxsat beradi.
+      await this.runOnce(`fail:${senderId}:${auto.id}`, 120, async () => {
+        try {
+          await this.instagram.sendPostbackButtons(creds, senderId, auto.followFailMessage || DEF_FAIL_MSG, [
+            { title: auto.followFailButton || DEF_FAIL_BTN, payload: `FOLLOWCHECK:${auto.id}` },
+          ]);
+          this.logger.log(`⛔ @${name} hali obuna emas — qayta so'rov yuborildi`);
+        } catch (err: any) {
+          if (err instanceof IgRateLimitError) throw err;
+          const igErr = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+          this.logger.error(`[Obuna qayta so'rov xato] ${igErr}`);
+        }
+      });
+    }
+  }
+
+  /** Asosiy DM (shablon + URL tugmalar) yuborish */
+  private async sendMainDm(
+    creds: IgCredentials,
+    recipientId: string,
+    auto: any,
+    name: string,
+    commentText: string,
+  ) {
+    const tmpl = this.pickRandom(auto.dmTemplates);
+    if (!tmpl) return;
+    const dmText = tmpl.replace('{name}', name).replace('{comment}', commentText);
+    try {
+      const validButtons = (auto.dmButtons || []).filter(
+        (b: any) => b.title?.trim() && b.url?.trim(),
+      );
+      if (validButtons.length) {
+        await this.instagram.sendDMButtons(creds, recipientId, dmText, validButtons);
+      } else {
+        await this.instagram.sendDM(creds, recipientId, dmText);
+      }
+      await this.logs.create({
+        type: 'success',
+        action: 'Asosiy DM (obunadan keyin)',
+        message: dmText.substring(0, 100),
+        user: name,
+      });
+    } catch (err: any) {
+      if (err instanceof IgRateLimitError) throw err; // navbatni pauza qilib retry
+      const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      this.logger.error(`[Asosiy DM xato] ${igError}`);
+      await this.logs.create({
+        type: 'error',
+        action: 'Asosiy DM (obunadan keyin)',
+        message: igError.substring(0, 300),
+        user: name,
+      });
+    }
+  }
+
+  async handleComment(commentData: any) {
+    const creds: IgCredentials = this.credsProvider.creds;
+    const botAccountId = this.credsProvider.accountId;
+
+    const commentId: string = commentData.id;
+    const commentText: string = commentData.text ?? '';
+    const commenterId: string = commentData.from?.id;
+    const commenterName: string = commentData.from?.username || 'foydalanuvchi';
+    const mediaId: string = commentData.media?.id;
+
+    // O'z izohimizga javob bermaymiz
+    if (commenterId && commenterId === botAccountId) return;
+
+    this.logger.log(`Yangi komment @${commenterName}: "${commentText}"`);
+
+    const activeAutomations = await this.automations.findActive();
+    if (!activeAutomations.length) return;
+
+    const perUserLimit = +(this.config.get('PER_USER_COMMENT_LIMIT') ?? 10);
+
+    for (const auto of activeAutomations) {
+      // Post ko'lami
+      if (auto.postScope === 'specific') {
+        if (!mediaId || !auto.postIds.includes(mediaId)) continue;
+      }
+
+      // Kalit so'z tekshiruvi
+      let keywordMatched = true;
+      if (auto.triggerType === 'keyword') {
+        const validKw = (auto.keywords || []).filter((k) => k?.trim());
+        if (validKw.length > 0) {
+          const lower = commentText.toLowerCase();
+          keywordMatched = validKw.some((kw) => lower.includes(kw.toLowerCase()));
+        }
+      }
+      if (!keywordMatched) continue;
+
+      // Foydalanuvchi limiti
+      if (mediaId && commenterId) {
+        const limitCheck = await this.rateLimit.canReply(commenterId, perUserLimit, mediaId);
+        if (!limitCheck.allowed) {
+          this.logger.log(`Limit: @${commenterName} — ${limitCheck.reason}`);
+          continue;
+        }
+      }
+
+      // Inson kabi ko'rinishi uchun tasodifiy kechikish
+      await this.rateLimit.randomDelay(MIN_DELAY_MS, MAX_DELAY_MS);
+
+      let repliedOrDmed = false;
+
+      // --- Izohga ochiq javob ---
+      if (auto.replyEnabled) {
+        const tmpl = this.pickRandom(auto.replyTemplates);
+        if (tmpl) {
+          const reply = tmpl.replace('{name}', commenterName).replace('{comment}', commentText);
+          let ok = false;
+          await this.runOnce(`reply:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
+            try {
+              await this.instagram.replyToComment(creds, commentId, reply);
+              ok = true;
+              this.logger.log(`✅ Komment javob @${commenterName}: "${reply.substring(0, 60)}"`);
+              await this.logs.create({
+                type: 'success',
+                action: 'Komment Javob',
+                message: reply.substring(0, 100),
+                user: commenterName,
+                userMessage: commentText?.substring(0, 200),
+              });
+            } catch (err: any) {
+              if (err instanceof IgRateLimitError) throw err; // navbatni pauza qilib retry
+              await this.logs.create({
+                type: 'error',
+                action: 'Komment Javob',
+                message: err.message,
+                user: commenterName,
+              });
+            }
+          });
+          if (ok) repliedOrDmed = true;
+        }
+      }
+
+      // --- DM ---
+      if (auto.dmEnabled && commenterId) {
+        if (auto.followCheckEnabled) {
+          // Obunani tekshirish yoqilgan: asosiy DM o'rniga avval obuna so'rovi yuboramiz.
+          // Foydalanuvchi tugmani bosgach (messaging webhook) obuna tekshiriladi.
+          const askMsg = auto.followAskMessage || DEF_ASK_MSG;
+          const askBtn = auto.followAskButton || DEF_ASK_BTN;
+          let ok = false;
+          await this.runOnce(`ask:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
+            try {
+              // Birinchi kontakt: kommentga private reply, tugma xabarga qo'shilib chiqadi
+              await this.instagram.sendCommentButtons(creds, commentId, askMsg, [
+                { title: askBtn, payload: `FOLLOWCHECK:${auto.id}` },
+              ]);
+              ok = true;
+              this.logger.log(`📨 Obuna so'rovi yuborildi @${commenterName}`);
+              await this.logs.create({
+                type: 'success',
+                action: 'Obuna so\'rovi',
+                message: askMsg.substring(0, 100),
+                user: commenterName,
+                userMessage: commentText?.substring(0, 200),
+              });
+            } catch (err: any) {
+              if (err instanceof IgRateLimitError) throw err;
+              const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+              this.logger.error(`[Obuna so'rovi xato] ${igError}`);
+              await this.logs.create({
+                type: 'error',
+                action: 'Obuna so\'rovi',
+                message: igError.substring(0, 300),
+                user: commenterName,
+              });
+            }
+          });
+          if (ok) repliedOrDmed = true;
+        } else {
+          // Oddiy DM (obunani tekshirishsiz)
+          const tmpl = this.pickRandom(auto.dmTemplates);
+          if (tmpl) {
+            const dmText = tmpl.replace('{name}', commenterName).replace('{comment}', commentText);
+            let ok = false;
+            await this.runOnce(`dm:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
+              try {
+                const validButtons = (auto.dmButtons || []).filter(
+                  (b) => b.title?.trim() && b.url?.trim(),
+                );
+                if (validButtons.length) {
+                  await this.instagram.sendDMButtons(creds, commenterId, dmText, validButtons);
+                } else {
+                  await this.instagram.sendDM(creds, commenterId, dmText);
+                }
+                ok = true;
+                this.logger.log(`✅ DM @${commenterName}: "${dmText.substring(0, 60)}"`);
+                await this.logs.create({
+                  type: 'success',
+                  action: 'Kommentdan DM',
+                  message: dmText.substring(0, 100),
+                  user: commenterName,
+                  userMessage: commentText?.substring(0, 200),
+                });
+              } catch (err: any) {
+                if (err instanceof IgRateLimitError) throw err;
+                const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+                this.logger.error(`[Kommentdan DM xato] ${igError}`);
+                await this.logs.create({
+                  type: 'error',
+                  action: 'Kommentdan DM',
+                  message: igError.substring(0, 300),
+                  user: commenterName,
+                });
+              }
+            });
+            if (ok) repliedOrDmed = true;
+          }
+        }
+      }
+
+      if (repliedOrDmed && commenterId) {
+        await this.rateLimit.recordReply(commenterId, 24, mediaId);
+        break; // bitta izohga faqat bitta avtomatizatsiya javob beradi
+      }
+    }
+  }
+}
