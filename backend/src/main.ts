@@ -3,10 +3,11 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as express from 'express';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     // rawBody webhook imzosini (x-hub-signature-256) tekshirish uchun kerak
     bodyParser: false,
   });
@@ -19,6 +20,10 @@ async function bootstrap() {
       },
     }),
   );
+
+  // Reverse proxy (nginx, Render, ngrok) orqasida haqiqiy IP ni olish uchun —
+  // login urinishlarini bloklash to'g'ri ishlashi shunga bog'liq
+  app.set('trust proxy', 1);
 
   const config = app.get(ConfigService);
   const origin = config.get<string>('FRONTEND_ORIGIN') || '*';

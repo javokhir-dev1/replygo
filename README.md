@@ -1,7 +1,8 @@
 # ReplyGo
 
 Instagram komment va DM avtomatizatsiyasi — **bitta foydalanuvchi** uchun soddalashtirilgan versiya.
-Login yo'q; barcha token va sozlamalar `.env` fayldan olinadi.
+Barcha Instagram token va sozlamalari `.env` fayldan olinadi; panelga kirish
+bitta login/parol bilan himoyalangan (u ham `.env` da).
 
 `javobgo` loyihasidagi avtomatizatsiya logikasi asos qilib olingan, lekin:
 - ko'p foydalanuvchi / telegram / JWT login **olib tashlangan**
@@ -14,16 +15,45 @@ Login yo'q; barcha token va sozlamalar `.env` fayldan olinadi.
 replygo/
 ├── backend/          NestJS + TypeORM (PostgreSQL)
 │   └── src/
+│       ├── auth/           login, JWT, global guard
 │       ├── config/         .env dan Instagram creds
 │       ├── instagram/      Graph API chaqiruvlari (reply, DM, tugmalar, postlar)
 │       ├── automations/    qoidalar CRUD
 │       ├── logs/           yuborilgan javoblar tarixi
 │       ├── rate-limit/     foydalanuvchi bo'yicha cheklov
 │       └── webhook/        Instagram webhook + komment "engine"
-└── frontend/         Next.js panel (login yo'q)
-    ├── app/          ro'yxat + forma + loglar sahifasi
-    └── components/   AutomationForm
+└── frontend/         Next.js panel
+    ├── app/          login + ro'yxat + forma + loglar sahifasi
+    ├── components/   Shell (kirish darvozasi + header), AutomationForm
+    └── lib/          api.ts (Authorization header), auth.ts (token)
 ```
+
+## Kirish (login)
+
+Panelning **barcha** endpointlari default himoyalangan. Faqat ikkitasi ochiq:
+`POST /api/auth/login` va `/api/webhook` (uni Meta chaqiradi, u `x-hub-signature-256`
+imzosi bilan himoyalangan).
+
+Oqim: login/parol → backend tekshiradi → JWT qaytaradi → token brauzer
+`localStorage` da saqlanadi → har bir so'rovga `Authorization: Bearer <token>`
+qo'shiladi. Token muddati tugasa yoki yaroqsiz bo'lsa, frontend avtomatik
+login sahifasiga qaytaradi.
+
+Qo'shimcha himoya: bitta IP dan 5 marta xato parol kiritilsa, 15 daqiqaga
+bloklanadi.
+
+`.env` da:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=kuchli-parol
+JWT_SECRET=<openssl rand -hex 32>
+JWT_EXPIRES_IN=7d
+```
+
+Uchalasi to'ldirilmasa backend **ishga tushmaydi** — bu himoyasiz deploy
+qilib qo'yishning oldini oladi. `JWT_SECRET` o'zgartirilsa barcha mavjud
+tokenlar bekor bo'ladi (majburiy qayta kirish).
 
 ## Ishlash mantig'i
 
@@ -77,18 +107,26 @@ Lokalda test uchun `ngrok http 4000` orqali public URL oching.
 
 ## API (backend)
 
+🔒 = `Authorization: Bearer <token>` talab qiladi.
+
 | Metod | Yo'l | Vazifa |
 |------|------|--------|
-| GET | `/api/automations` | barcha qoidalar |
-| POST | `/api/automations` | yangi qoida |
-| PATCH | `/api/automations/:id` | tahrirlash |
-| PATCH | `/api/automations/:id/toggle` | yoqish/o'chirish |
-| DELETE | `/api/automations/:id` | o'chirish |
-| GET | `/api/instagram/posts` | postlar ro'yxati |
-| GET | `/api/instagram/account` | ulangan akkaunt holati |
-| GET | `/api/logs` | loglar |
-| GET/POST | `/api/webhook` | Meta webhook |
+| POST | `/api/auth/login` | login/parol → token |
+| GET | 🔒 `/api/auth/me` | token hali amal qilyaptimi |
+| GET | 🔒 `/api/automations` | barcha qoidalar |
+| POST | 🔒 `/api/automations` | yangi qoida |
+| PATCH | 🔒 `/api/automations/:id` | tahrirlash |
+| PATCH | 🔒 `/api/automations/:id/toggle` | yoqish/o'chirish |
+| DELETE | 🔒 `/api/automations/:id` | o'chirish |
+| GET | 🔒 `/api/instagram/posts` | postlar ro'yxati |
+| GET | 🔒 `/api/instagram/account` | ulangan akkaunt holati |
+| GET | 🔒 `/api/logs` | loglar |
+| GET/POST | `/api/webhook` | Meta webhook (imzo bilan himoyalangan) |
 
 ## Eslatma
 - `synchronize: true` kichik loyiha uchun qulay; production da TypeORM migration ishlatgan ma'qul.
 - Webhook Metaga darhol `200` qaytaradi, ishlov fon rejimida bajariladi.
+- Guard **default himoya** tamoyilida ishlaydi: yangi controller qo'shsangiz u
+  avtomatik himoyalanadi. Ochiq qilish uchun `@Public()` ni ataylab qo'yish kerak.
+- Token `localStorage` da turadi. Production da panelni HTTPS orqali oching —
+  aks holda token tarmoqda ochiq ketadi.

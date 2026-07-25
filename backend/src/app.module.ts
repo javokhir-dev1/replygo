@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
 import IORedis from 'ioredis';
 
+import { AuthModule } from './auth/auth.module';
 import { InstagramModule } from './instagram/instagram.module';
 import { AutomationsModule } from './automations/automations.module';
 import { LogsModule } from './logs/logs.module';
@@ -33,6 +34,8 @@ import { WebhookModule } from './webhook/webhook.module';
         ),
       }),
     }),
+    // Auth global guard'ni ham ro'yxatdan o'tkazadi — qolgan modullardan oldin turadi
+    AuthModule,
     InstagramModule,
     AutomationsModule,
     LogsModule,

@@ -3,7 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
 import * as crypto from 'crypto';
 import { WebhookService } from './webhook.service';
+import { Public } from '../auth/public.decorator';
 
+// Webhookni Meta chaqiradi — JWT bo'lishi mumkin emas.
+// Himoya o'rniga x-hub-signature-256 imzosi tekshiriladi (pastda).
+@Public()
 @Controller('api/webhook')
 export class WebhookController {
   private readonly logger = new Logger(WebhookController.name);
