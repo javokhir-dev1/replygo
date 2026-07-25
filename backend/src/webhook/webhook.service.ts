@@ -207,7 +207,12 @@ export class WebhookService {
     }
   }
 
-  /** Asosiy DM (shablon + URL tugmalar) yuborish */
+  /**
+   * Asosiy DM (shablon + URL tugmalar) yuborish.
+   * Bu yerda recipient.id TO'G'RI: bu funksiya faqat foydalanuvchi tugmani
+   * bosgandan keyin chaqiriladi, ya'ni u bizga xabar yozgan va 24 soatlik
+   * oyna ochiq.
+   */
   private async sendMainDm(
     creds: IgCredentials,
     recipientId: string,
@@ -376,10 +381,20 @@ export class WebhookService {
                 const validButtons = (auto.dmButtons || []).filter(
                   (b) => b.title?.trim() && b.url?.trim(),
                 );
+                // PRIVATE REPLY (recipient.comment_id) — kommentga javoban.
+                // Oddiy DM (recipient.id) bu yerda ISHLAMAYDI: u 24 soatlik
+                // xabar oynasi ochiq bo'lishini talab qiladi, komment yozgan
+                // odamda esa odatda u yopiq (code 10 / subcode 2534022).
+                // Private reply 7 kun ichida, komment boshiga bir marta ishlaydi.
                 if (validButtons.length) {
-                  await this.instagram.sendDMButtons(creds, commenterId, dmText, validButtons);
+                  await this.instagram.sendPrivateReplyButtons(
+                    creds,
+                    commentId,
+                    dmText,
+                    validButtons,
+                  );
                 } else {
-                  await this.instagram.sendDM(creds, commenterId, dmText);
+                  await this.instagram.sendPrivateReply(creds, commentId, dmText);
                 }
                 ok = true;
                 this.logger.log(`✅ DM @${commenterName}: "${dmText.substring(0, 60)}"`);

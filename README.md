@@ -66,6 +66,19 @@ Instagram postga izoh kelganda → webhook `POST /api/webhook` → faol qoidalar
 `{name}` → foydalanuvchi nomi, `{comment}` → izoh matni bilan almashtiriladi.
 Bir izohga faqat bitta qoida javob beradi.
 
+### DM qanday yuboriladi
+
+Kommentga javoban DM **private reply** (`recipient.comment_id`) orqali ketadi —
+u 24 soatlik xabar oynasini talab qilmaydi. Meta cheklovlari:
+
+- bitta kommentga faqat **bitta** xabar
+- komment yozilganidan keyin **7 kun** ichida
+- Live uchun faqat efir davomida
+
+Oddiy DM (`recipient.id`) faqat oyna ochiq bo'lganda ishlaydi va shuning uchun
+faqat foydalanuvchi tugmani bosgandan keyin (obuna tekshiruvidan so'ng)
+ishlatiladi. Aralashtirilsa Meta `code 10 / subcode 2534022` qaytaradi.
+
 ## O'rnatish
 
 ### 1. Ma'lumotlar bazasi

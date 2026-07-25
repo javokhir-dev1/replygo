@@ -46,13 +46,43 @@ export class InstagramService {
     return res.data;
   }
 
-  async sendDM(creds: IgCredentials, recipientId: string, text: string) {
+  /** Barcha xabar yuborish yo'llari uchun yagona nuqta */
+  private async postMessage(creds: IgCredentials, recipient: object, message: object) {
     const res = await http.post(`${BASE_URL}/${creds.accountId}/messages`, {
-      recipient: { id: recipientId },
-      message: { text },
+      recipient,
+      message,
       access_token: creds.token,
     });
     return res.data;
+  }
+
+  /** URL tugmali shablon (bosilganda saytga o'tadi) */
+  private urlButtonTemplate(text: string, buttons: { title: string; url: string }[]) {
+    return {
+      attachment: {
+        type: 'template',
+        payload: {
+          template_type: 'button',
+          text: text.substring(0, 640),
+          buttons: buttons.slice(0, 3).map((b) => ({
+            type: 'web_url',
+            url: b.url,
+            title: b.title.substring(0, 20),
+          })),
+        },
+      },
+    };
+  }
+
+  /**
+   * Oddiy DM (recipient.id).
+   * DIQQAT: faqat 24 soatlik xabar oynasi OCHIQ bo'lganda ishlaydi — ya'ni
+   * foydalanuvchi oxirgi 24 soat ichida bizga xabar yozgan bo'lishi kerak.
+   * Kommentga javoban yuborish uchun sendPrivateReply() ni ishlating,
+   * aks holda Meta `code 10 / subcode 2534022` qaytaradi.
+   */
+  async sendDM(creds: IgCredentials, recipientId: string, text: string) {
+    return this.postMessage(creds, { id: recipientId }, { text });
   }
 
   async sendDMButtons(
@@ -61,25 +91,33 @@ export class InstagramService {
     text: string,
     buttons: { title: string; url: string }[],
   ) {
-    const res = await http.post(`${BASE_URL}/${creds.accountId}/messages`, {
-      recipient: { id: recipientId },
-      message: {
-        attachment: {
-          type: 'template',
-          payload: {
-            template_type: 'button',
-            text,
-            buttons: buttons.slice(0, 3).map((b) => ({
-              type: 'web_url',
-              url: b.url,
-              title: b.title,
-            })),
-          },
-        },
-      },
-      access_token: creds.token,
-    });
-    return res.data;
+    return this.postMessage(creds, { id: recipientId }, this.urlButtonTemplate(text, buttons));
+  }
+
+  /**
+   * PRIVATE REPLY — kommentga javoban shaxsiy xabar (recipient.comment_id).
+   * 24 soatlik oyna TALAB QILINMAYDI. Cheklovlar (Meta hujjati bo'yicha):
+   *   - bitta kommentga faqat BITTA xabar
+   *   - komment yozilganidan keyin 7 kun ichida
+   *   - Live uchun faqat efir davomida
+   * Foydalanuvchi obuna bo'lsa "Inbox"ga, bo'lmasa "Requests"ga tushadi.
+   */
+  async sendPrivateReply(creds: IgCredentials, commentId: string, text: string) {
+    return this.postMessage(creds, { comment_id: commentId }, { text });
+  }
+
+  /** Private reply — URL tugmalari bilan */
+  async sendPrivateReplyButtons(
+    creds: IgCredentials,
+    commentId: string,
+    text: string,
+    buttons: { title: string; url: string }[],
+  ) {
+    return this.postMessage(
+      creds,
+      { comment_id: commentId },
+      this.urlButtonTemplate(text, buttons),
+    );
   }
 
   /**
@@ -112,7 +150,7 @@ export class InstagramService {
    * Button template — tugmalar xabar bubble'iga QO'SHILIB chiqadi (quick reply kabi
    * pastda emas). Bosilganda 'postback' event webhook orqali qaytadi.
    */
-  private buttonTemplate(text: string, buttons: { title: string; payload: string }[]) {
+  private postbackTemplate(text: string, buttons: { title: string; payload: string }[]) {
     return {
       attachment: {
         type: 'template',
@@ -140,12 +178,11 @@ export class InstagramService {
     text: string,
     buttons: { title: string; payload: string }[],
   ) {
-    const res = await http.post(`${BASE_URL}/${creds.accountId}/messages`, {
-      recipient: { comment_id: commentId },
-      message: this.buttonTemplate(text, buttons),
-      access_token: creds.token,
-    });
-    return res.data;
+    return this.postMessage(
+      creds,
+      { comment_id: commentId },
+      this.postbackTemplate(text, buttons),
+    );
   }
 
   /**
@@ -158,12 +195,7 @@ export class InstagramService {
     text: string,
     buttons: { title: string; payload: string }[],
   ) {
-    const res = await http.post(`${BASE_URL}/${creds.accountId}/messages`, {
-      recipient: { id: recipientId },
-      message: this.buttonTemplate(text, buttons),
-      access_token: creds.token,
-    });
-    return res.data;
+    return this.postMessage(creds, { id: recipientId }, this.postbackTemplate(text, buttons));
   }
 
   async getAccountInfo(creds: IgCredentials) {
