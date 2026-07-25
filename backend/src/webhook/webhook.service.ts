@@ -76,6 +76,19 @@ export class WebhookService {
   }
 
   /**
+   * BullMQ jobId ichida ':' belgisiga RUXSAT BERMAYDI — u Redis kalitlarida
+   * ajratuvchi sifatida band ("Custom Ids cannot contain :").
+   * Payload'lar (masalan `FOLLOWCHECK:12`) va Meta ID'lari ichida ':' uchrashi
+   * mumkin, shuning uchun jobId'ni har doim shu funksiya orqali o'tkazamiz.
+   */
+  private safeJobId(...parts: (string | number | undefined | null)[]): string {
+    return parts
+      .map((p) => String(p ?? ''))
+      .join('-')
+      .replace(/:/g, '-');
+  }
+
+  /**
    * Webhook entry'sini NAVBATGA qo'shadi (to'g'ridan-to'g'ri ishlamaydi).
    * Shu bilan: rate limit, retry, concurrency nazorati va restart'ga chidamlilik ta'minlanadi.
    */
@@ -96,7 +109,7 @@ export class WebhookService {
           // jobId = comment id → Meta qayta yuborsa dublikat job yaratilmaydi.
           await this.commentsQueue.add(JOB_COMMENT, change.value, {
             ...this.jobOpts,
-            jobId: `comment:${change.value.id}`,
+            jobId: this.safeJobId('comment', change.value.id),
           });
         } else {
           this.logger.log(`Webhook: '${change.field}' field (ishlanmaydi), e'tiborsiz`);
@@ -109,8 +122,13 @@ export class WebhookService {
       for (const msg of entry.messaging) {
         const mid = msg.message?.mid;
         const dedup = mid
-          ? `msg:${mid}`
-          : `msg:${msg.sender?.id}:${msg.timestamp}:${msg.postback?.payload || msg.message?.quick_reply?.payload || ''}`;
+          ? this.safeJobId('msg', mid)
+          : this.safeJobId(
+              'msg',
+              msg.sender?.id,
+              msg.timestamp,
+              msg.postback?.payload || msg.message?.quick_reply?.payload || '',
+            );
         // DM navbatiga (tez/mustaqil worker) — komment yuklamasidan ta'sirlanmaydi.
         await this.messagingQueue.add(JOB_MESSAGING, msg, {
           ...this.jobOpts,
