@@ -39,18 +39,30 @@ export class WebhookService {
 
   /**
    * Idempotentlik: bitta amalni (masalan bir kommentga javob) faqat BIR marta bajaradi.
-   * fn() muvaffaqiyatli tugasa marker qo'yiladi. Agar fn() rate-limit (429) tashlasa,
-   * marker qo'yilmaydi → job qayta urinsa, amal qayta bajariladi (dublikatsiz).
-   * Boshqa xatolar fn() ichida ushlab, log qilinadi (retry qilinmaydi).
+   *
+   * fn() `true` qaytarsa — amal BAJARILDI, marker qo'yiladi va qayta urinilmaydi.
+   * fn() `false` qaytarsa — amal muvaffaqiyatsiz, marker QO'YILMAYDI, ya'ni
+   * keyingi urinishda qayta bajariladi.
+   * fn() throw qilsa (429) — marker qo'yilmaydi, navbat pauza qilib retry qiladi.
+   *
+   * DIQQAT: ilgari marker fn() natijasidan qat'i nazar qo'yilardi. Natijada bitta
+   * o'tkinchi xato (masalan yopiq DM oynasi) o'sha kommentga javob berishni
+   * 7 kunga butunlay bloklab qo'yardi.
    */
-  private async runOnce(key: string, ttlSec: number, fn: () => Promise<void>): Promise<boolean> {
+  private async runOnce(key: string, ttlSec: number, fn: () => Promise<boolean>): Promise<boolean> {
     try {
-      if (await this.redis.exists(key)) return false; // allaqachon bajarilgan
+      if (await this.redis.exists(key)) {
+        this.logger.log(`⏭  Idempotentlik: '${key}' allaqachon bajarilgan, o'tkazib yuborildi`);
+        return false;
+      }
     } catch (e: any) {
       // Redis o'qishda xato bo'lsa ham amalni bajaramiz (faqat log)
       this.logger.warn(`Idempotency o'qishda xato: ${e.message}`);
     }
-    await fn(); // 429 bo'lsa bu yerdan throw bo'ladi (marker qo'yilmaydi)
+
+    const ok = await fn(); // 429 bo'lsa bu yerdan throw bo'ladi (marker qo'yilmaydi)
+    if (!ok) return false; // muvaffaqiyatsiz — keyinroq qayta urinish mumkin
+
     try {
       await this.redis.set(key, '1', 'EX', ttlSec);
     } catch {
@@ -186,8 +198,9 @@ export class WebhookService {
     if (profile.is_user_follow_business === true) {
       // Obuna tasdiqlandi → asosiy DM yuboramiz (bir marta)
       await this.runOnce(`main:${senderId}:${auto.id}`, 24 * 3600, async () => {
-        await this.sendMainDm(creds, senderId, auto, name, '');
-        this.logger.log(`✅ Obuna tasdiqlandi, asosiy DM yuborildi @${name}`);
+        const sent = await this.sendMainDm(creds, senderId, auto, name, '');
+        if (sent) this.logger.log(`✅ Obuna tasdiqlandi, asosiy DM yuborildi @${name}`);
+        return sent;
       });
     } else {
       // Obuna emas → qayta so'rov + "Obuna bo'ldim" tugmasi.
@@ -198,10 +211,12 @@ export class WebhookService {
             { title: auto.followFailButton || DEF_FAIL_BTN, payload: `FOLLOWCHECK:${auto.id}` },
           ]);
           this.logger.log(`⛔ @${name} hali obuna emas — qayta so'rov yuborildi`);
+          return true;
         } catch (err: any) {
           if (err instanceof IgRateLimitError) throw err;
           const igErr = err.response?.data ? JSON.stringify(err.response.data) : err.message;
           this.logger.error(`[Obuna qayta so'rov xato] ${igErr}`);
+          return false;
         }
       });
     }
@@ -219,9 +234,14 @@ export class WebhookService {
     auto: any,
     name: string,
     commentText: string,
-  ) {
+  ): Promise<boolean> {
     const tmpl = this.pickRandom(auto.dmTemplates);
-    if (!tmpl) return;
+    if (!tmpl) {
+      this.logger.warn(
+        `⚠️  Avtomatizatsiya #${auto.id} ("${auto.name}") da DM yoqilgan, lekin DM shabloni bo'sh — yuborilmadi`,
+      );
+      return false;
+    }
     const dmText = tmpl.replace('{name}', name).replace('{comment}', commentText);
     try {
       const validButtons = (auto.dmButtons || []).filter(
@@ -238,6 +258,7 @@ export class WebhookService {
         message: dmText.substring(0, 100),
         user: name,
       });
+      return true;
     } catch (err: any) {
       if (err instanceof IgRateLimitError) throw err; // navbatni pauza qilib retry
       const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
@@ -248,6 +269,7 @@ export class WebhookService {
         message: igError.substring(0, 300),
         user: name,
       });
+      return false;
     }
   }
 
@@ -305,13 +327,15 @@ export class WebhookService {
       // --- Izohga ochiq javob ---
       if (auto.replyEnabled) {
         const tmpl = this.pickRandom(auto.replyTemplates);
-        if (tmpl) {
+        if (!tmpl) {
+          this.logger.warn(
+            `⚠️  #${auto.id} ("${auto.name}"): komment javobi yoqilgan, lekin shablon bo'sh`,
+          );
+        } else {
           const reply = tmpl.replace('{name}', commenterName).replace('{comment}', commentText);
-          let ok = false;
-          await this.runOnce(`reply:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
+          const sent = await this.runOnce(`reply:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
             try {
               await this.instagram.replyToComment(creds, commentId, reply);
-              ok = true;
               this.logger.log(`✅ Komment javob @${commenterName}: "${reply.substring(0, 60)}"`);
               await this.logs.create({
                 type: 'success',
@@ -320,35 +344,46 @@ export class WebhookService {
                 user: commenterName,
                 userMessage: commentText?.substring(0, 200),
               });
+              return true;
             } catch (err: any) {
               if (err instanceof IgRateLimitError) throw err; // navbatni pauza qilib retry
+              const igErr = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+              this.logger.error(`[Komment javob xato] ${igErr}`);
               await this.logs.create({
                 type: 'error',
                 action: 'Komment Javob',
-                message: err.message,
+                message: igErr.substring(0, 300),
                 user: commenterName,
               });
+              return false;
             }
           });
-          if (ok) repliedOrDmed = true;
+          if (sent) repliedOrDmed = true;
         }
       }
 
       // --- DM ---
+      if (auto.dmEnabled && !commenterId) {
+        this.logger.warn(
+          `⚠️  #${auto.id}: DM yoqilgan, lekin webhook'da from.id yo'q — DM yuborib bo'lmaydi`,
+        );
+      }
+      if (!auto.dmEnabled) {
+        this.logger.log(`ℹ️  #${auto.id} ("${auto.name}"): DM o'chirilgan (dmEnabled=false)`);
+      }
       if (auto.dmEnabled && commenterId) {
         if (auto.followCheckEnabled) {
           // Obunani tekshirish yoqilgan: asosiy DM o'rniga avval obuna so'rovi yuboramiz.
           // Foydalanuvchi tugmani bosgach (messaging webhook) obuna tekshiriladi.
           const askMsg = auto.followAskMessage || DEF_ASK_MSG;
           const askBtn = auto.followAskButton || DEF_ASK_BTN;
-          let ok = false;
-          await this.runOnce(`ask:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
+          this.logger.log(`🔒 #${auto.id}: obuna tekshiruvi yoqilgan — avval so'rov yuboriladi`);
+          const sent = await this.runOnce(`ask:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
             try {
               // Birinchi kontakt: kommentga private reply, tugma xabarga qo'shilib chiqadi
               await this.instagram.sendCommentButtons(creds, commentId, askMsg, [
                 { title: askBtn, payload: `FOLLOWCHECK:${auto.id}` },
               ]);
-              ok = true;
               this.logger.log(`📨 Obuna so'rovi yuborildi @${commenterName}`);
               await this.logs.create({
                 type: 'success',
@@ -357,6 +392,7 @@ export class WebhookService {
                 user: commenterName,
                 userMessage: commentText?.substring(0, 200),
               });
+              return true;
             } catch (err: any) {
               if (err instanceof IgRateLimitError) throw err;
               const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
@@ -367,16 +403,20 @@ export class WebhookService {
                 message: igError.substring(0, 300),
                 user: commenterName,
               });
+              return false;
             }
           });
-          if (ok) repliedOrDmed = true;
+          if (sent) repliedOrDmed = true;
         } else {
           // Oddiy DM (obunani tekshirishsiz)
           const tmpl = this.pickRandom(auto.dmTemplates);
-          if (tmpl) {
+          if (!tmpl) {
+            this.logger.warn(
+              `⚠️  #${auto.id} ("${auto.name}"): DM yoqilgan, lekin DM shabloni bo'sh — yuborilmadi`,
+            );
+          } else {
             const dmText = tmpl.replace('{name}', commenterName).replace('{comment}', commentText);
-            let ok = false;
-            await this.runOnce(`dm:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
+            const sent = await this.runOnce(`dm:${commentId}:${auto.id}`, 7 * 24 * 3600, async () => {
               try {
                 const validButtons = (auto.dmButtons || []).filter(
                   (b) => b.title?.trim() && b.url?.trim(),
@@ -396,7 +436,6 @@ export class WebhookService {
                 } else {
                   await this.instagram.sendPrivateReply(creds, commentId, dmText);
                 }
-                ok = true;
                 this.logger.log(`✅ DM @${commenterName}: "${dmText.substring(0, 60)}"`);
                 await this.logs.create({
                   type: 'success',
@@ -405,6 +444,7 @@ export class WebhookService {
                   user: commenterName,
                   userMessage: commentText?.substring(0, 200),
                 });
+                return true;
               } catch (err: any) {
                 if (err instanceof IgRateLimitError) throw err;
                 const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
@@ -415,9 +455,10 @@ export class WebhookService {
                   message: igError.substring(0, 300),
                   user: commenterName,
                 });
+                return false;
               }
             });
-            if (ok) repliedOrDmed = true;
+            if (sent) repliedOrDmed = true;
           }
         }
       }
