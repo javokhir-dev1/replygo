@@ -5,14 +5,13 @@ import { Queue } from 'bullmq';
 import type IORedis from 'ioredis';
 import { InstagramService, IgCredentials } from '../instagram/instagram.service';
 import { IgRateLimitError } from '../instagram/ig-errors';
-import { IgCredsProvider } from '../config/ig-creds.provider';
+import { IgAccountsService } from '../ig-accounts/ig-accounts.service';
+import type { IgAccount } from '../ig-accounts/entities/ig-account.entity';
 import { AutomationsService } from '../automations/automations.service';
 import { LogsService } from '../logs/logs.service';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
+import { SettingsService } from '../settings/settings.service';
 import { COMMENTS_QUEUE, MESSAGING_QUEUE, JOB_COMMENT, JOB_MESSAGING, IG_REDIS } from './queue.constants';
-
-const MIN_DELAY_MS = 5_000;
-const MAX_DELAY_MS = 10_000;
 
 // Obuna-tekshirish matnlari uchun standart qiymatlar (entity default o'rniga)
 const DEF_ASK_MSG = "Ma'lumotni olish uchun quyidagi tugmani bosing 👇";
@@ -28,10 +27,11 @@ export class WebhookService {
   constructor(
     private readonly config: ConfigService,
     private readonly instagram: InstagramService,
-    private readonly credsProvider: IgCredsProvider,
+    private readonly accounts: IgAccountsService,
     private readonly automations: AutomationsService,
     private readonly logs: LogsService,
     private readonly rateLimit: RateLimitService,
+    private readonly settings: SettingsService,
     @InjectQueue(COMMENTS_QUEUE) private readonly commentsQueue: Queue,
     @InjectQueue(MESSAGING_QUEUE) private readonly messagingQueue: Queue,
     @Inject(IG_REDIS) private readonly redis: IORedis,
@@ -105,13 +105,16 @@ export class WebhookService {
    * Shu bilan: rate limit, retry, concurrency nazorati va restart'ga chidamlilik ta'minlanadi.
    */
   async enqueueEntry(entry: any) {
-    const botAccountId = this.credsProvider.accountId;
-
-    // Bitta userli rejim: faqat sozlangan akkauntga tegishli entrylarni qabul qilamiz
-    if (entry.id && botAccountId && entry.id !== botAccountId) {
-      this.logger.warn(`Webhook: begona akkaunt entry (${entry.id}), e'tiborsiz`);
+    // Ko'p foydalanuvchili rejim: entry.id — hodisa kelgan Instagram akkaunt.
+    // Faqat ReplyGo'ga ulangan akkauntlar ishlanadi.
+    const acc = entry.id ? await this.accounts.byIgUserId(String(entry.id)) : null;
+    if (!acc) {
+      this.logger.warn(`Webhook: ulanmagan akkaunt (${entry.id ?? '?'}), e'tiborsiz`);
       return;
     }
+    // Job'da faqat akkaunt ID'si — token ishlov paytida bazadan olinadi
+    // (navbatda turgan paytda token yangilanishi mumkin)
+    const igUserId = acc.igUserId;
 
     // Kommentlar (changes)
     if (Array.isArray(entry.changes)) {
@@ -119,7 +122,7 @@ export class WebhookService {
         if (change.field === 'comments' && change.value?.id) {
           // Kommentlar navbatiga (sekin/xavfsiz worker).
           // jobId = comment id → Meta qayta yuborsa dublikat job yaratilmaydi.
-          await this.commentsQueue.add(JOB_COMMENT, change.value, {
+          await this.commentsQueue.add(JOB_COMMENT, { igUserId, data: change.value }, {
             ...this.jobOpts,
             jobId: this.safeJobId('comment', change.value.id),
           });
@@ -142,7 +145,7 @@ export class WebhookService {
               msg.postback?.payload || msg.message?.quick_reply?.payload || '',
             );
         // DM navbatiga (tez/mustaqil worker) — komment yuklamasidan ta'sirlanmaydi.
-        await this.messagingQueue.add(JOB_MESSAGING, msg, {
+        await this.messagingQueue.add(JOB_MESSAGING, { igUserId, data: msg }, {
           ...this.jobOpts,
           jobId: dedup,
         });
@@ -154,10 +157,81 @@ export class WebhookService {
     }
   }
 
+
+  /** Job → akkaunt. Akkaunt uzilgan bo'lsa null (job jim tugaydi) */
+  private async resolve(job: any): Promise<{ acc: IgAccount; data: any } | null> {
+    if (!job?.igUserId) {
+      this.logger.warn('Eski formatdagi job (akkauntsiz) — e\'tiborsiz');
+      return null;
+    }
+    const acc = await this.accounts.byIgUserId(String(job.igUserId));
+    if (!acc) {
+      this.logger.warn(`Akkaunt ${job.igUserId} uzilgan — job e'tiborsiz`);
+      return null;
+    }
+    return { acc, data: job.data };
+  }
+
+  /**
+   * Yuklamaga qarab sekinlashish (DM oldidan).
+   *
+   * Odatdagi holatda (daqiqasiga bir nechta komment) navbat bo'sh turadi va
+   * javob DARHOL ketadi. So'rovlar ko'payib navbatda kutayotganlar soni
+   * DM_BUSY_THRESHOLD dan oshsa — har DM oldidan 5–10 s kutamiz.
+   *
+   * Ya'ni sekinlashuv faqat kerak bo'lganda yoqiladi: kam yuklamada tezlik
+   * yo'qotmaymiz, ko'p yuklamada Instagram limitiga urilmaymiz.
+   */
+  private async adaptiveDmDelay(userId: number): Promise<boolean> {
+    const { dmMinDelayMs: minMs, dmMaxDelayMs: maxMs, dmBusyThreshold: threshold } = await this.settings.get(userId);
+    if (maxMs <= 0) return false;
+
+    let waiting = 0;
+    try {
+      waiting = await this.commentsQueue.getWaitingCount();
+    } catch {
+      return false; // Redis o'qilmasa sekinlashtirmaymiz
+    }
+    if (waiting < threshold) return false;
+
+    this.logger.log(`🐢 Navbatda ${waiting} ta kutyapti — DM oldidan ${minMs}-${maxMs}ms kutiladi`);
+    await this.rateLimit.randomDelay(Math.max(0, minMs), maxMs);
+    return true;
+  }
+
+  /**
+   * Tugmani ketma-ket bosaverishdan himoya.
+   *
+   * Bitta foydalanuvchi oynada DM_BUTTON_MAX_PRESSES dan ko'p bosса, uning
+   * so'rovlari to'xtatiladi va bir marta ogohlantirish yuboriladi. Oyna
+   * tugagach (DM_BUTTON_WINDOW_SEC) hisob nolga tushadi va yana ishlaydi.
+   */
+  private async buttonThrottle(
+    userId: number,
+    igUserId: string,
+    senderId: string,
+  ): Promise<{ blocked: boolean; windowSec: number }> {
+    const { dmButtonMaxPresses: max, dmButtonWindowSec: windowSec } = await this.settings.get(userId);
+    if (max <= 0) return { blocked: false, windowSec };
+
+    try {
+      const count = await this.redis.incr(`btn:${igUserId}:${senderId}`);
+      if (count === 1) await this.redis.expire(`btn:${igUserId}:${senderId}`, windowSec);
+      return { blocked: count > max, windowSec };
+    } catch (e: any) {
+      this.logger.warn(`Tugma hisobini o'qib bo'lmadi: ${e.message}`);
+      return { blocked: false, windowSec };
+    }
+  }
+
   /** Quick reply / postback tugma bosilganda — obunani tekshirish (processor chaqiradi) */
-  async handleMessaging(msg: any) {
-    const creds: IgCredentials = this.credsProvider.creds;
-    const botAccountId = this.credsProvider.accountId;
+  async handleMessaging(job: any) {
+    const r = await this.resolve(job);
+    if (!r) return;
+    const msg = r.data;
+    const userId = r.acc.userId;
+    const creds: IgCredentials = this.accounts.creds(r.acc);
+    const botAccountId = r.acc.igUserId;
     const senderId: string = msg.sender?.id;
 
     // O'zimiz yuborgan (echo) yoki botning o'z xabarlarini e'tiborsiz qoldiramiz
@@ -173,9 +247,32 @@ export class WebhookService {
     const autoId = Number(payload.split(':')[1]);
     if (!autoId) return;
 
+    // Ketma-ket bosaverishdan himoya — Instagram limitiga ham, foydalanuvchiga
+    // ham foydasi yo'q. Ogohlantirish oyna davomida faqat BIR marta ketadi.
+    const throttle = await this.buttonThrottle(userId, botAccountId, senderId);
+    if (throttle.blocked) {
+      const mins = Math.max(1, Math.round(throttle.windowSec / 60));
+      this.logger.warn(`⏳ ${senderId} tugmani juda ko'p bosdi — so'rov to'xtatildi`);
+      await this.runOnce(`btnwarn:${botAccountId}:${senderId}`, throttle.windowSec, async () => {
+        try {
+          await this.instagram.sendDM(
+            creds,
+            senderId,
+            `⏳ Juda ko'p so'rov yuborildi. Iltimos, ${mins} daqiqadan so'ng qayta urinib ko'ring.`,
+          );
+          return true;
+        } catch (err: any) {
+          if (err instanceof IgRateLimitError) throw err;
+          return false;
+        }
+      });
+      return;
+    }
+
     let auto: any;
     try {
-      auto = await this.automations.findOne(autoId);
+      // Faqat shu akkaunt egasining qoidasi — begona payload boshqa qoidani ishga tushirmasin
+      auto = await this.automations.findOne(autoId, userId);
     } catch {
       this.logger.warn(`Obuna tekshiruvi: avtomatizatsiya #${autoId} topilmadi`);
       return;
@@ -198,7 +295,7 @@ export class WebhookService {
     if (profile.is_user_follow_business === true) {
       // Obuna tasdiqlandi → asosiy DM yuboramiz (bir marta)
       await this.runOnce(`main:${senderId}:${auto.id}`, 24 * 3600, async () => {
-        const sent = await this.sendMainDm(creds, senderId, auto, name, '');
+        const sent = await this.sendMainDm(userId, creds, senderId, auto, name, '');
         if (sent) this.logger.log(`✅ Obuna tasdiqlandi, asosiy DM yuborildi @${name}`);
         return sent;
       });
@@ -229,6 +326,7 @@ export class WebhookService {
    * oyna ochiq.
    */
   private async sendMainDm(
+    userId: number,
     creds: IgCredentials,
     recipientId: string,
     auto: any,
@@ -253,6 +351,7 @@ export class WebhookService {
         await this.instagram.sendDM(creds, recipientId, dmText);
       }
       await this.logs.create({
+        userId,
         type: 'success',
         action: 'Asosiy DM (obunadan keyin)',
         message: dmText.substring(0, 100),
@@ -264,6 +363,7 @@ export class WebhookService {
       const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
       this.logger.error(`[Asosiy DM xato] ${igError}`);
       await this.logs.create({
+        userId,
         type: 'error',
         action: 'Asosiy DM (obunadan keyin)',
         message: igError.substring(0, 300),
@@ -273,9 +373,13 @@ export class WebhookService {
     }
   }
 
-  async handleComment(commentData: any) {
-    const creds: IgCredentials = this.credsProvider.creds;
-    const botAccountId = this.credsProvider.accountId;
+  async handleComment(job: any) {
+    const r = await this.resolve(job);
+    if (!r) return;
+    const commentData = r.data;
+    const userId = r.acc.userId;
+    const creds: IgCredentials = this.accounts.creds(r.acc);
+    const botAccountId = r.acc.igUserId;
 
     const commentId: string = commentData.id;
     const commentText: string = commentData.text ?? '';
@@ -288,10 +392,15 @@ export class WebhookService {
 
     this.logger.log(`Yangi komment @${commenterName}: "${commentText}"`);
 
-    const activeAutomations = await this.automations.findActive();
+    const activeAutomations = await this.automations.findActive(userId);
     if (!activeAutomations.length) return;
 
-    const perUserLimit = +(this.config.get('PER_USER_COMMENT_LIMIT') ?? 10);
+    // Tizim sozlamalari (baza, system_settings). perUserLimit 0 = cheksiz
+    const {
+      perUserLimit,
+      commentMinDelayMs: minDelay,
+      commentMaxDelayMs: maxDelay,
+    } = await this.settings.get(userId);
 
     for (const auto of activeAutomations) {
       // Post ko'lami
@@ -310,8 +419,8 @@ export class WebhookService {
       }
       if (!keywordMatched) continue;
 
-      // Foydalanuvchi limiti
-      if (mediaId && commenterId) {
+      // Foydalanuvchi limiti (perUserLimit <= 0 bo'lsa tekshirilmaydi)
+      if (perUserLimit > 0 && mediaId && commenterId) {
         const limitCheck = await this.rateLimit.canReply(commenterId, perUserLimit, mediaId);
         if (!limitCheck.allowed) {
           this.logger.log(`Limit: @${commenterName} — ${limitCheck.reason}`);
@@ -319,8 +428,10 @@ export class WebhookService {
         }
       }
 
-      // Inson kabi ko'rinishi uchun tasodifiy kechikish
-      await this.rateLimit.randomDelay(MIN_DELAY_MS, MAX_DELAY_MS);
+      // Inson kabi ko'rinishi uchun tasodifiy kechikish (0 bo'lsa — darhol)
+      if (maxDelay > 0) {
+        await this.rateLimit.randomDelay(Math.max(0, minDelay), maxDelay);
+      }
 
       let repliedOrDmed = false;
 
@@ -338,6 +449,7 @@ export class WebhookService {
               await this.instagram.replyToComment(creds, commentId, reply);
               this.logger.log(`✅ Komment javob @${commenterName}: "${reply.substring(0, 60)}"`);
               await this.logs.create({
+                userId,
                 type: 'success',
                 action: 'Komment Javob',
                 message: reply.substring(0, 100),
@@ -350,6 +462,7 @@ export class WebhookService {
               const igErr = err.response?.data ? JSON.stringify(err.response.data) : err.message;
               this.logger.error(`[Komment javob xato] ${igErr}`);
               await this.logs.create({
+                userId,
                 type: 'error',
                 action: 'Komment Javob',
                 message: igErr.substring(0, 300),
@@ -372,6 +485,9 @@ export class WebhookService {
         this.logger.log(`ℹ️  #${auto.id} ("${auto.name}"): DM o'chirilgan (dmEnabled=false)`);
       }
       if (auto.dmEnabled && commenterId) {
+        // Yuklama yuqori bo'lsa shu yerda sekinlashamiz (kam yuklamada — darhol)
+        await this.adaptiveDmDelay(userId);
+
         if (auto.followCheckEnabled) {
           // Obunani tekshirish yoqilgan: asosiy DM o'rniga avval obuna so'rovi yuboramiz.
           // Foydalanuvchi tugmani bosgach (messaging webhook) obuna tekshiriladi.
@@ -386,6 +502,7 @@ export class WebhookService {
               ]);
               this.logger.log(`📨 Obuna so'rovi yuborildi @${commenterName}`);
               await this.logs.create({
+                userId,
                 type: 'success',
                 action: 'Obuna so\'rovi',
                 message: askMsg.substring(0, 100),
@@ -398,6 +515,7 @@ export class WebhookService {
               const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
               this.logger.error(`[Obuna so'rovi xato] ${igError}`);
               await this.logs.create({
+                userId,
                 type: 'error',
                 action: 'Obuna so\'rovi',
                 message: igError.substring(0, 300),
@@ -438,6 +556,7 @@ export class WebhookService {
                 }
                 this.logger.log(`✅ DM @${commenterName}: "${dmText.substring(0, 60)}"`);
                 await this.logs.create({
+                  userId,
                   type: 'success',
                   action: 'Kommentdan DM',
                   message: dmText.substring(0, 100),
@@ -450,6 +569,7 @@ export class WebhookService {
                 const igError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
                 this.logger.error(`[Kommentdan DM xato] ${igError}`);
                 await this.logs.create({
+                  userId,
                   type: 'error',
                   action: 'Kommentdan DM',
                   message: igError.substring(0, 300),

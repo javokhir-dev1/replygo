@@ -2,19 +2,165 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * ReplyGo — dizayn tokenlari.
+ *
+ * Yo'nalish: premium minimalizm. Monoxrom (siyoh + iliq oq), soyalar
+ * o'rniga 1px chiziqlar, bitta urg'u — siyohning o'zi. Rang faqat holat
+ * uchun (good/crit) va doim yozuv bilan birga keladi.
+ *
+ * Komponentlar faqat shu o'zgaruvchilarga tayanadi, shuning uchun tungi
+ * rejim — shunchaki tokenlarning ikkinchi to'plami.
+ */
 :root {
-  --bg: #f7f7f8;
-  --card: #ffffff;
-  --border: #e5e7eb;
-  --text: #111827;
-  --muted: #6b7280;
-  --primary: #7c3aed;
+  color-scheme: light;
+  --bg: #fafaf9;
+  --surface: #ffffff;
+  --sunken: #f4f4f2;
+  --line: #ececea;
+  --line-strong: #dcdcd8;
+  --ink: #0b0b0b;
+  --ink-2: #3d3d3a;
+  --muted: #8b8b86;
+  --accent: #0b0b0b;
+  --on-accent: #ffffff;
+  --ring: rgba(11, 11, 11, 0.08);
+  --good: #0ca30c;
+  --crit: #d03b3b;
+  --crit-soft: rgba(208, 59, 59, 0.08);
 }
 
-html, body {
-  background: var(--bg);
-  color: var(--text);
-  -webkit-font-smoothing: antialiased;
+/*
+ * Tungi rejim: tanlov <html data-theme> da (Sozlamalar → Ko'rinish).
+ *   data-theme yo'q   → tizim sozlamasi (prefers-color-scheme)
+ *   data-theme=light  → tizim tun bo'lsa ham kun
+ *   data-theme=dark   → har doim tun
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0b0b0a;
+    --surface: #131312;
+    --sunken: #1a1a19;
+    --line: #242422;
+    --line-strong: #31312e;
+    --ink: #f4f4f2;
+    --ink-2: #c8c8c3;
+    --muted: #84847e;
+    --accent: #f4f4f2;
+    --on-accent: #0b0b0a;
+    --ring: rgba(244, 244, 242, 0.1);
+    --crit-soft: rgba(208, 59, 59, 0.14);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b0b0a;
+  --surface: #131312;
+  --sunken: #1a1a19;
+  --line: #242422;
+  --line-strong: #31312e;
+  --ink: #f4f4f2;
+  --ink-2: #c8c8c3;
+  --muted: #84847e;
+  --accent: #f4f4f2;
+  --on-accent: #0b0b0a;
+  --ring: rgba(244, 244, 242, 0.1);
+  --crit-soft: rgba(208, 59, 59, 0.14);
 }
 
 * { box-sizing: border-box; }
+
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection { background: var(--ink); color: var(--bg); }
+
+@layer components {
+  .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding-left: 20px; padding-right: 20px; }
+
+  /* --- tipografiya --- */
+  .eyebrow { font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .title { font-size: 24px; line-height: 1.2; font-weight: 600; letter-spacing: -0.025em; }
+  .subtitle { font-size: 13px; color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* --- sirtlar --- */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+  .rows > * + * { border-top: 1px solid var(--line); }
+  .hairline { border-top: 1px solid var(--line); }
+
+  /* --- tugmalar --- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    height: 36px; padding: 0 14px; border-radius: 10px;
+    font-size: 13px; font-weight: 500; white-space: nowrap;
+    transition: background-color .15s, color .15s, border-color .15s, opacity .15s;
+  }
+  .btn:disabled { opacity: .35; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: var(--on-accent); }
+  .btn-primary:not(:disabled):hover { opacity: .86; }
+  .btn-outline { background: var(--surface); color: var(--ink-2); border: 1px solid var(--line-strong); }
+  .btn-outline:not(:disabled):hover { background: var(--sunken); color: var(--ink); }
+  .btn-ghost { color: var(--ink-2); }
+  .btn-ghost:not(:disabled):hover { background: var(--sunken); color: var(--ink); }
+  .btn-danger { color: var(--crit); }
+  .btn-danger:not(:disabled):hover { background: var(--crit-soft); }
+  .icon-btn {
+    display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 9px;
+    color: var(--muted); transition: background-color .15s, color .15s;
+  }
+  .icon-btn:hover { background: var(--sunken); color: var(--ink); }
+  .icon-btn.danger:hover { background: var(--crit-soft); color: var(--crit); }
+  .link { font-size: 12.5px; font-weight: 500; color: var(--ink-2); display: inline-flex; align-items: center; gap: 5px; }
+  .link:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+
+  /* --- maydonlar --- */
+  .field {
+    width: 100%; min-height: 40px; padding: 9px 12px; border-radius: 10px;
+    background: var(--surface); border: 1px solid var(--line-strong);
+    font-size: 14px; color: var(--ink); outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .field::placeholder { color: var(--muted); }
+  .field:focus { border-color: var(--ink-2); box-shadow: 0 0 0 3px var(--ring); }
+  textarea.field { resize: none; line-height: 1.5; }
+  .label { display: block; font-size: 12.5px; font-weight: 500; color: var(--ink-2); margin-bottom: 6px; }
+
+  /* --- segment boshqaruvi --- */
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px;
+         padding: 3px; border-radius: 11px; background: var(--sunken); }
+  .seg > button { height: 32px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--muted);
+                  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+                  transition: background-color .15s, color .15s; }
+  .seg > button:hover { color: var(--ink); }
+  .seg > button[data-on='true'] { background: var(--surface); color: var(--ink);
+                                  box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.04); }
+
+  /* --- kalitcha (switch) --- */
+  .switch { position: relative; width: 34px; height: 20px; border-radius: 999px; flex-shrink: 0;
+            background: var(--line-strong); transition: background-color .2s; display: inline-block; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                   border-radius: 999px; background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.18);
+                   transition: transform .2s cubic-bezier(.3,.7,.4,1); }
+  .switch[data-on='true'] { background: var(--accent); }
+  .switch[data-on='true']::after { transform: translateX(14px); background: var(--on-accent); }
+
+  /* --- belgilar --- */
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px;
+          border-radius: 999px; border: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
+  .tag { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 11px;
+         border-radius: 999px; background: var(--sunken); font-size: 12.5px; color: var(--ink); }
+  .dot { width: 6px; height: 6px; border-radius: 999px; display: inline-block; flex-shrink: 0; }
+
+  .skeleton { background: var(--sunken); border-radius: 10px; animation: pulse 1.6s ease-in-out infinite; }
+}
+
+@keyframes pulse { 50% { opacity: .5; } }

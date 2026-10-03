@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Zap, Lock, User, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import { Mark } from '@/components/Mark';
 import { login } from '@/lib/api';
 import { setToken, hasValidToken } from '@/lib/auth';
 
@@ -36,90 +38,61 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-[70vh] flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="flex flex-col items-center mb-6">
-          <span
-            className="grid place-items-center w-12 h-12 rounded-xl text-white mb-3"
-            style={{ background: 'linear-gradient(135deg,#7C3AED,#8B5CF6)' }}
-          >
-            <Zap size={22} />
-          </span>
-          <h1 className="text-xl font-bold">ReplyGo</h1>
-          <p className="text-sm text-[var(--muted)] mt-1">Panelga kirish</p>
-        </div>
+    <div className="min-h-screen flex items-center justify-center px-5">
+      <div className="w-full max-w-[340px]">
+        <Mark size={32} />
+        <h1 className="title mt-8">Xush kelibsiz</h1>
+        <p className="subtitle mt-1.5">ReplyGo paneliga kirish</p>
 
-        <form
-          onSubmit={submit}
-          className="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-5 space-y-4"
-        >
+        <form onSubmit={submit} className="mt-8 space-y-4">
           <div>
-            <label htmlFor="username" className="block text-sm font-medium mb-1.5">
-              Login
-            </label>
-            <div className="relative">
-              <User
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]"
-              />
-              <input
-                id="username"
-                name="username"
-                type="text"
-                autoComplete="username"
-                autoFocus
-                required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-[var(--border)] bg-white outline-none focus:border-[var(--primary)] transition-colors"
-              />
-            </div>
+            <label htmlFor="username" className="label">Login</label>
+            <input
+              id="username"
+              name="username"
+              type="text"
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              autoFocus
+              required
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="field"
+            />
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm font-medium mb-1.5">
-              Parol
-            </label>
-            <div className="relative">
-              <Lock
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]"
-              />
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-[var(--border)] bg-white outline-none focus:border-[var(--primary)] transition-colors"
-              />
-            </div>
+            <label htmlFor="password" className="label">Parol</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="field"
+            />
           </div>
 
           {error && (
-            <p
-              role="alert"
-              className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2"
-            >
+            <p role="alert" className="text-[13px] text-[var(--crit)]">
               {error}
             </p>
           )}
 
-          <button
-            type="submit"
-            disabled={busy}
-            className="w-full py-2.5 rounded-lg text-white font-medium flex items-center justify-center gap-2 disabled:opacity-60 transition-opacity"
-            style={{ background: 'linear-gradient(135deg,#7C3AED,#8B5CF6)' }}
-          >
-            {busy && <Loader2 size={16} className="animate-spin" />}
-            {busy ? 'Tekshirilmoqda...' : 'Kirish'}
+          <button type="submit" disabled={busy} className="btn btn-primary w-full !h-10 !mt-6">
+            {busy && <Loader2 size={15} strokeWidth={2} className="animate-spin" />}
+            {busy ? 'Tekshirilmoqda…' : 'Kirish'}
           </button>
         </form>
 
-        <p className="text-xs text-[var(--muted)] text-center mt-4">
-          Login va parol backend <code>.env</code> faylida sozlanadi
+        <p className="subtitle mt-8">
+          Akkauntingiz yo&apos;qmi?{' '}
+          <Link href="/register" className="text-[var(--ink)] font-medium underline underline-offset-4 decoration-[var(--line-strong)] hover:decoration-[var(--ink)]">
+            Ro&apos;yxatdan o&apos;tish
+          </Link>
         </p>
       </div>
     </div>

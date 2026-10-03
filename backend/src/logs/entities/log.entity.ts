@@ -5,6 +5,11 @@ export class Log {
   @PrimaryGeneratedColumn()
   id: number;
 
+  // Qaysi foydalanuvchining boti yozgan
+  @Index()
+  @Column({ type: 'int', nullable: true })
+  userId: number | null;
+
   // 'success' | 'error'
   @Column({ default: 'success' })
   @Index()

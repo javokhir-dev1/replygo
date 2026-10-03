@@ -1,118 +1,154 @@
-import { Injectable, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, UnauthorizedException, HttpException, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import * as crypto from 'crypto';
+import { UsersService } from '../users/users.service';
+import { verifyPassword, DUMMY_HASH } from '../common/password';
 
-/** Bitta IP uchun urinishlar hisobi (brute-force himoyasi) */
+/** Bitta IP uchun urinishlar hisobi */
 interface AttemptState {
   count: number;
   lockedUntil: number;
+  windowStart: number;
 }
 
-const MAX_ATTEMPTS = 5;
+const MAX_LOGIN_FAILS = 5;
 const LOCK_MS = 15 * 60_000; // 5 marta xato → 15 daqiqa blok
-const ATTEMPT_TTL_MS = 60 * 60_000; // eski yozuvlarni tozalash oynasi
+const MAX_REGISTERS = 5; // bitta IP'dan soatiga
+const REGISTER_WINDOW_MS = 60 * 60_000;
+const SWEEP_MS = 60 * 60_000;
 
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
-  private readonly attempts = new Map<string, AttemptState>();
+  private readonly loginFails = new Map<string, AttemptState>();
+  private readonly registers = new Map<string, AttemptState>();
   private lastSweep = Date.now();
 
   constructor(
     private readonly config: ConfigService,
     private readonly jwt: JwtService,
+    private readonly users: UsersService,
   ) {}
 
-  /** Ishga tushganda sozlamalar to'liq ekanini tekshiramiz — noto'g'ri deploy'ni erta ushlaydi */
+  /** JWT_SECRET'siz tokenlarni imzolab bo'lmaydi — noto'g'ri deploy'ni erta ushlaymiz */
   onModuleInit() {
-    const missing = ['ADMIN_USERNAME', 'ADMIN_PASSWORD', 'JWT_SECRET'].filter(
-      (k) => !this.config.get<string>(k),
-    );
-    if (missing.length) {
-      throw new Error(
-        `.env da quyidagilar to'ldirilmagan: ${missing.join(', ')}. ` +
-          'Panel himoyasi ularsiz ishlamaydi.',
-      );
-    }
     const secret = this.config.get<string>('JWT_SECRET') || '';
+    if (!secret) {
+      throw new Error(".env da JWT_SECRET to'ldirilmagan. `openssl rand -hex 32` bilan yarating.");
+    }
     if (secret.length < 32) {
-      this.logger.warn(
-        `JWT_SECRET juda qisqa (${secret.length} belgi). Kamida 32 belgi tavsiya etiladi: ` +
-          "`openssl rand -hex 32` bilan yarating.",
-      );
+      this.logger.warn(`JWT_SECRET juda qisqa (${secret.length} belgi). Kamida 32 belgi tavsiya etiladi.`);
     }
   }
 
-  /**
-   * Vaqt bo'yicha oshkor bo'lmaydigan taqqoslash.
-   * Oddiy `===` satrlarni birinchi farqda to'xtatadi va nazariy jihatdan
-   * parolni belgima-belgi topishga imkon beradi.
-   */
-  private safeEqual(a: string, b: string): boolean {
-    const bufA = Buffer.from(a, 'utf8');
-    const bufB = Buffer.from(b, 'utf8');
-    // Uzunlik farqi ham oshkor bo'lmasligi uchun avval hash olamiz
-    const hashA = crypto.createHash('sha256').update(bufA).digest();
-    const hashB = crypto.createHash('sha256').update(bufB).digest();
-    return crypto.timingSafeEqual(hashA, hashB);
-  }
-
-  /** Eskirgan urinish yozuvlarini vaqti-vaqti bilan tozalaymiz (xotira o'smasligi uchun) */
+  /** Eskirgan yozuvlarni vaqti-vaqti bilan tozalaymiz (xotira o'smasligi uchun) */
   private sweep(now: number) {
-    if (now - this.lastSweep < ATTEMPT_TTL_MS) return;
+    if (now - this.lastSweep < SWEEP_MS) return;
     this.lastSweep = now;
-    for (const [ip, st] of this.attempts) {
-      if (st.lockedUntil < now - ATTEMPT_TTL_MS) this.attempts.delete(ip);
+    for (const map of [this.loginFails, this.registers]) {
+      for (const [ip, st] of map) {
+        if (st.lockedUntil < now && now - st.windowStart > SWEEP_MS) map.delete(ip);
+      }
     }
   }
 
   private assertNotLocked(ip: string) {
     const now = Date.now();
     this.sweep(now);
-    const st = this.attempts.get(ip);
+    const st = this.loginFails.get(ip);
     if (st && st.lockedUntil > now) {
       const min = Math.ceil((st.lockedUntil - now) / 60_000);
-      throw new UnauthorizedException(
-        `Juda ko'p xato urinish. ${min} daqiqadan keyin qayta urinib ko'ring.`,
-      );
+      throw new UnauthorizedException(`Juda ko'p xato urinish. ${min} daqiqadan keyin qayta urinib ko'ring.`);
     }
   }
 
   private registerFailure(ip: string) {
     const now = Date.now();
-    const st = this.attempts.get(ip) ?? { count: 0, lockedUntil: 0 };
+    const st = this.loginFails.get(ip) ?? { count: 0, lockedUntil: 0, windowStart: now };
     st.count += 1;
-    if (st.count >= MAX_ATTEMPTS) {
+    if (st.count >= MAX_LOGIN_FAILS) {
       st.lockedUntil = now + LOCK_MS;
       st.count = 0;
-      this.logger.warn(`Login bloklandi (IP: ${ip}) — ${MAX_ATTEMPTS} marta xato parol`);
+      this.logger.warn(`Login bloklandi (IP: ${ip}) — ${MAX_LOGIN_FAILS} marta xato parol`);
     }
-    this.attempts.set(ip, st);
+    this.loginFails.set(ip, st);
+  }
+
+  private async issue(user: { id: number; username: string; tokenVersion?: number }) {
+    const expiresIn = this.config.get<string>('JWT_EXPIRES_IN') || '7d';
+    // v — sessiya versiyasi; parol o'zgarganda oshadi va eski tokenlar bekor bo'ladi
+    const token = await this.jwt.signAsync(
+      { sub: String(user.id), username: user.username, v: user.tokenVersion ?? 0 },
+      { expiresIn },
+    );
+    return { token, username: user.username, expiresIn };
+  }
+
+  async register(username: string, password: string, ip: string) {
+    const now = Date.now();
+    this.sweep(now);
+    const st = this.registers.get(ip);
+    if (st && now - st.windowStart < REGISTER_WINDOW_MS && st.count >= MAX_REGISTERS) {
+      throw new HttpException(
+        'Bu manzildan juda ko\'p ro\'yxatdan o\'tildi. Birozdan so\'ng urinib ko\'ring.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const user = await this.users.create(username, password);
+
+    const cur = st && now - st.windowStart < REGISTER_WINDOW_MS ? st : { count: 0, lockedUntil: 0, windowStart: now };
+    cur.count += 1;
+    this.registers.set(ip, cur);
+
+    this.logger.log(`🆕 Yangi foydalanuvchi: ${user.username} (#${user.id}, IP: ${ip})`);
+    await this.users.touchLogin(user.id);
+    return this.issue(user);
+  }
+
+  /** Joriy parolni tekshiradi; xato bo'lsa login kabi IP bo'yicha bloklashga hisoblanadi */
+  private async confirmPassword(userId: number, password: string, ip: string) {
+    this.assertNotLocked(ip);
+    const user = await this.users.findById(userId);
+    if (!user || !(await verifyPassword(password, user.passwordHash))) {
+      this.registerFailure(ip);
+      this.logger.warn(`Joriy parol xato (foydalanuvchi #${userId}, IP: ${ip})`);
+      throw new UnauthorizedException("Joriy parol noto'g'ri");
+    }
+    return user;
+  }
+
+  async changeUsername(userId: number, username: string, password: string, ip: string) {
+    const before = await this.confirmPassword(userId, password, ip);
+    const user = await this.users.changeUsername(userId, username);
+    this.logger.log(`Login o'zgardi: ${before.username} → ${user.username} (#${userId})`);
+    return this.issue(user); // token ichidagi login ham yangilanadi
+  }
+
+  async changePassword(userId: number, current: string, next: string, ip: string) {
+    await this.confirmPassword(userId, current, ip);
+    if (current === next) throw new BadRequestException('Yangi parol eskisidan farq qilsin');
+    const user = await this.users.changePassword(userId, next);
+    this.logger.log(`Parol o'zgardi: ${user.username} (#${userId}) — boshqa sessiyalar bekor qilindi`);
+    return this.issue(user); // shu qurilma kirgan holicha qoladi
   }
 
   async login(username: string, password: string, ip: string) {
     this.assertNotLocked(ip);
 
-    const expectedUser = this.config.get<string>('ADMIN_USERNAME') || '';
-    const expectedPass = this.config.get<string>('ADMIN_PASSWORD') || '';
+    const user = await this.users.findByUsername(username);
+    // Foydalanuvchi topilmasa ham xesh tekshiramiz — vaqtdan "bunday login bor-yo'q" bilinmasin
+    const ok = await verifyPassword(password, user?.passwordHash ?? DUMMY_HASH);
 
-    // Ikkalasini ham har doim tekshiramiz — qaysi biri xato ekani vaqtdan bilinmasin
-    const userOk = this.safeEqual(username, expectedUser);
-    const passOk = this.safeEqual(password, expectedPass);
-
-    if (!userOk || !passOk) {
+    if (!user || !ok) {
       this.registerFailure(ip);
       this.logger.warn(`Muvaffaqiyatsiz login urinishi (IP: ${ip})`);
-      // Qaysi maydon xato ekanini aytmaymiz
       throw new UnauthorizedException("Login yoki parol noto'g'ri");
     }
 
-    this.attempts.delete(ip);
-    const expiresIn = this.config.get<string>('JWT_EXPIRES_IN') || '7d';
-    const token = await this.jwt.signAsync({ sub: 'admin', username }, { expiresIn });
-
-    this.logger.log(`✅ Muvaffaqiyatli login (IP: ${ip})`);
-    return { token, username, expiresIn };
+    this.loginFails.delete(ip);
+    await this.users.touchLogin(user.id);
+    this.logger.log(`✅ Login: ${user.username} (IP: ${ip})`);
+    return this.issue(user);
   }
 }

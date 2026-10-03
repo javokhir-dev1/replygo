@@ -1,9 +1,14 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, Index } from 'typeorm';
 
 @Entity('automations')
 export class Automation {
   @PrimaryGeneratedColumn()
   id: number;
+
+  // Egasi. nullable — eski (bitta-adminli) qatorlar ko'chirish paytida egaga biriktiriladi
+  @Index()
+  @Column({ type: 'int', nullable: true })
+  userId: number | null;
 
   @Column()
   name: string;

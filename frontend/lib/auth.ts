@@ -8,8 +8,13 @@ const hasWindow = () => typeof window !== 'undefined';
 export const getToken = (): string | null =>
   hasWindow() ? window.localStorage.getItem(TOKEN_KEY) : null;
 
+/** Token almashganda (login o'zgardi) — chap panel shu hodisani tinglaydi */
+export const TOKEN_CHANGED = 'replygo:token-changed';
+
 export const setToken = (token: string) => {
-  if (hasWindow()) window.localStorage.setItem(TOKEN_KEY, token);
+  if (!hasWindow()) return;
+  window.localStorage.setItem(TOKEN_KEY, token);
+  window.dispatchEvent(new Event(TOKEN_CHANGED));
 };
 
 export const clearToken = () => {
@@ -35,6 +40,18 @@ export function hasValidToken(): boolean {
     // Buzuq token — tozalaymiz
     clearToken();
     return false;
+  }
+}
+
+/** Token ichidagi login (faqat ko'rsatish uchun — imzo backend'da tekshiriladi) */
+export function getUsername(): string | null {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(b64)).username ?? null;
+  } catch {
+    return null;
   }
 }
 

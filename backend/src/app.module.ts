@@ -10,6 +10,11 @@ import { AutomationsModule } from './automations/automations.module';
 import { LogsModule } from './logs/logs.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { WebhookModule } from './webhook/webhook.module';
+import { TelegramModule } from './telegram/telegram.module';
+import { SettingsModule } from './settings/settings.module';
+import { UsersModule } from './users/users.module';
+import { IgAccountsModule } from './ig-accounts/ig-accounts.module';
+import { LegacyMigrationService } from './bootstrap/legacy-migration.service';
 
 @Module({
   imports: [
@@ -34,13 +39,23 @@ import { WebhookModule } from './webhook/webhook.module';
         ),
       }),
     }),
+    // Foydalanuvchilar (global) — Auth undan foydalanadi
+    UsersModule,
     // Auth global guard'ni ham ro'yxatdan o'tkazadi — qolgan modullardan oldin turadi
     AuthModule,
+    // Global: har foydalanuvchining Instagram ulanishi, OAuth, token yangilash
+    IgAccountsModule,
+    // Global: paneldan o'zgartiriladigan ish sozlamalari (baza → .env → standart)
+    SettingsModule,
+    // Global: loglarni Telegram'ga uzatadi (LogsService shunga tayanadi)
+    TelegramModule,
     InstagramModule,
     AutomationsModule,
     LogsModule,
     RateLimitModule,
     WebhookModule,
   ],
+  // Bitta-adminli versiyadan ko'chirish (idempotent)
+  providers: [LegacyMigrationService],
 })
 export class AppModule {}
