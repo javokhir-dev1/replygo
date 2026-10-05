@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { LogOut, Loader2, Zap, ScrollText, SlidersHorizontal, Instagram, Send, LayoutGrid } from 'lucide-react';
+import { LogOut, Loader2, Zap, SlidersHorizontal, Instagram, Send, LayoutGrid, LayoutDashboard, Clapperboard } from 'lucide-react';
 import { hasValidToken, logout, getUsername, TOKEN_CHANGED } from '@/lib/auth';
 import { Mark } from './Mark';
 import { IgAccountBadge } from './IgAccountBadge';
+import { ThemeToggle } from './ThemeToggle';
 import { WORKSPACES, workspaceOf, rememberWorkspace, type Workspace } from '@/lib/workspace';
 
 /**
@@ -16,6 +17,9 @@ import { WORKSPACES, workspaceOf, rememberWorkspace, type Workspace } from '@/li
  * brauzerda chetlab o'tsa ham, ma'lumot ko'rmaydi, chunki backend'dagi
  * global guard har bir so'rovda tokenni talab qiladi.
  */
+// Grafik va to'rli (grid) sahifalar — keng konteyner (.wrap-wide, 1160px)
+const WIDE_PAGES = ['/instagram', '/instagram/posts', '/instagram/posts/scan'];
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -69,8 +73,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // Har bo'limning o'z menyusi — almashtirganda butunlay almashadi
   const NAV: Record<Workspace, { href: string; label: string; Icon: typeof Zap }[]> = {
     instagram: [
-      { href: '/instagram', label: 'Avtomatizatsiya', Icon: Zap },
-      { href: '/instagram/logs', label: 'Loglar', Icon: ScrollText },
+      { href: '/instagram', label: 'Dashboard', Icon: LayoutDashboard },
+      { href: '/instagram/posts', label: 'Postlarim', Icon: Clapperboard },
+      { href: '/instagram/automations', label: 'Avtomatizatsiya', Icon: Zap },
       { href: '/instagram/settings', label: 'Sozlamalar', Icon: SlidersHorizontal },
     ],
     telegram: [{ href: '/telegram', label: 'Umumiy', Icon: LayoutGrid }],
@@ -95,7 +100,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             data-on={ws === w.id}
             className={`h-8 rounded-lg inline-flex items-center justify-center gap-1.5 font-medium transition-colors ${
               compact ? 'text-[12.5px]' : 'text-[13px]'
-            } ${ws === w.id ? 'bg-[var(--surface)] text-[var(--ink)] shadow-[0_0_0_1px_var(--line),0_1px_2px_rgba(0,0,0,.04)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}
+            } ${ws === w.id ? 'bg-[var(--surface)] text-[var(--accent-ink)] shadow-[0_0_0_1px_var(--accent-line),0_1px_2px_rgba(76,29,149,.08)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}
           >
             <Icon size={14} strokeWidth={1.75} />
             {w.label}
@@ -133,11 +138,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 aria-current={active ? 'page' : undefined}
                 className={`flex items-center gap-3 h-9 px-3 rounded-[9px] text-[13.5px] transition-colors ${
                   active
-                    ? 'bg-[var(--sunken)] text-[var(--ink)] font-medium'
+                    ? 'bg-[var(--accent-soft)] text-[var(--accent-ink)] font-medium'
                     : 'text-[var(--muted)] hover:text-[var(--ink)] hover:bg-[var(--sunken)]'
                 }`}
               >
-                <Icon size={15} strokeWidth={active ? 2 : 1.75} />
+                <Icon size={15} strokeWidth={active ? 2 : 1.75} className={active ? 'text-[var(--accent-ink)]' : ''} />
                 {label}
               </Link>
             );
@@ -147,11 +152,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="mt-auto pt-4 border-t border-[var(--line)] flex items-center gap-2.5 px-2">
           <span
             aria-hidden
-            className="grid place-items-center w-7 h-7 rounded-full bg-[var(--sunken)] text-[12px] font-semibold uppercase text-[var(--ink-2)]"
+            className="grid place-items-center w-7 h-7 rounded-full bg-[var(--accent-soft)] text-[12px] font-semibold uppercase text-[var(--accent-ink)]"
           >
             {username?.[0] ?? '?'}
           </span>
           <span className="flex-1 min-w-0 text-[13px] font-medium truncate">{username}</span>
+          <ThemeToggle />
           <button onClick={logout} title="Chiqish" aria-label="Chiqish" className="icon-btn">
             <LogOut size={15} strokeWidth={1.75} />
           </button>
@@ -168,7 +174,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <Mark size={20} />
           </Link>
           <div className="flex-1 max-w-[260px]">{switcher(true)}</div>
-          <button onClick={logout} title="Chiqish" aria-label="Chiqish" className="icon-btn -mr-2 ml-auto">
+          <ThemeToggle className="ml-auto" />
+          <button onClick={logout} title="Chiqish" aria-label="Chiqish" className="icon-btn -mr-2">
             <LogOut size={15} strokeWidth={1.75} />
           </button>
         </div>
@@ -190,7 +197,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 }`}
               >
                 {label}
-                {active && <span className="absolute left-0 right-0 -bottom-px h-px bg-[var(--ink)]" />}
+                {active && <span className="absolute left-0 right-0 -bottom-px h-0.5 rounded-full bg-[var(--accent)]" />}
               </Link>
             );
           })}
@@ -198,7 +205,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </header>
 
       <main className="flex-1 min-w-0">
-        <div className="wrap pt-8 md:pt-12 pb-20">{children}</div>
+        {/* Dashboard — keng maydon (grafiklar), qolgan sahifalar — o'qish uchun tor */}
+        <div className={`wrap pt-8 md:pt-12 pb-20 ${WIDE_PAGES.includes(pathname) ? 'wrap-wide' : ''}`}>{children}</div>
       </main>
     </div>
   );

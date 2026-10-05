@@ -253,7 +253,7 @@ export function AutomationForm({
                         onClick={() => togglePost(post)}
                         aria-pressed={selected}
                         className={`relative rounded-lg overflow-hidden aspect-square transition-opacity ${selected ? '' : 'opacity-60 hover:opacity-100'}`}
-                        style={selected ? { boxShadow: '0 0 0 2px var(--bg), 0 0 0 4px var(--ink)' } : undefined}
+                        style={selected ? { boxShadow: '0 0 0 2px var(--bg), 0 0 0 4px var(--accent)' } : undefined}
                       >
                         {thumb ? (
                           // eslint-disable-next-line @next/next/no-img-element

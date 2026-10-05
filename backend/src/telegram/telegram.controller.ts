@@ -5,6 +5,7 @@ import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 import { TelegramService } from './telegram.service';
 import { TelegramStatsService } from './telegram-stats.service';
 import { verifyInitData } from './telegram-webapp';
+import { IgAccountsService } from '../ig-accounts/ig-accounts.service';
 
 @Controller('api/telegram')
 export class TelegramController {
@@ -14,6 +15,7 @@ export class TelegramController {
     private readonly config: ConfigService,
     private readonly stats: TelegramStatsService,
     private readonly telegram: TelegramService,
+    private readonly accounts: IgAccountsService,
   ) {}
 
   /**
@@ -41,9 +43,13 @@ export class TelegramController {
       );
     }
 
+    // Panelda tanlangan Instagram akkaunt statistikasi
+    const acc = await this.accounts.activeFor(userId);
+    if (!acc) throw new UnauthorizedException('Instagram akkaunt ulanmagan. Panel → Sozlamalar.');
     return {
       user: { id: res.user.id, username: res.user.username ?? null },
-      stats: await this.stats.build(userId),
+      account: acc.username,
+      stats: await this.stats.build(acc.id),
     };
   }
 

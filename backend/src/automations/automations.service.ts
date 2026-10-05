@@ -16,12 +16,14 @@ export class AutomationsService {
     private repo: Repository<Automation>,
   ) {}
 
-  findAll(userId: number) {
-    return this.repo.find({ where: { userId }, order: { createdAt: 'DESC' } });
+  /** Panel: tanlangan akkaunt qoidalari */
+  findAll(userId: number, igAccountId: number) {
+    return this.repo.find({ where: { userId, igAccountId }, order: { createdAt: 'DESC' } });
   }
 
-  findActive(userId: number) {
-    return this.repo.find({ where: { userId, isActive: true } });
+  /** Bot: komment kelgan akkauntning faol qoidalari */
+  findActiveForAccount(igAccountId: number) {
+    return this.repo.find({ where: { igAccountId, isActive: true } });
   }
 
   async findOne(id: number, userId: number) {
@@ -30,8 +32,8 @@ export class AutomationsService {
     return a;
   }
 
-  create(userId: number, dto: CreateAutomationDto) {
-    return this.repo.save(this.repo.create({ ...dto, userId }));
+  create(userId: number, igAccountId: number, dto: CreateAutomationDto) {
+    return this.repo.save(this.repo.create({ ...dto, userId, igAccountId }));
   }
 
   async update(id: number, userId: number, dto: CreateAutomationDto) {

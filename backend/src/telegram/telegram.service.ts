@@ -14,6 +14,8 @@ import { SettingsService } from '../settings/settings.service';
 export interface LogLike {
   id?: number;
   userId?: number | null;
+  /** Qaysi Instagram akkauntdan (bir nechta akkaunt bo'lsa ajratish uchun) */
+  accountUsername?: string | null;
   type: string;
   action: string;
   message?: string;
@@ -255,6 +257,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     else if (/obuna/i.test(action)) kind = '🔒';
 
     const lines: string[] = [`${icon} ${kind} <b>${escapeHtml(action)}</b>`];
+    if (log.accountUsername) lines.push(`📸 akkaunt: @${escapeHtml(log.accountUsername)}`);
 
     if (log.user) lines.push(`👤 <b>@${escapeHtml(log.user)}</b>`);
     if (log.userMessage) lines.push(`💬 <i>${escapeHtml(this.cut(log.userMessage))}</i>`);

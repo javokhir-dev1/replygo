@@ -33,9 +33,9 @@ export class TelegramStatsService {
     @InjectRepository(Automation) private readonly automations: Repository<Automation>,
   ) {}
 
-  /** Faqat bitta foydalanuvchining ma'lumotlari */
-  async build(userId: number): Promise<StatsResponse> {
-    const u = Number(userId); // SQL'ga faqat butun son tushadi
+  /** Faqat bitta Instagram akkauntning ma'lumotlari */
+  async build(igAccountId: number): Promise<StatsResponse> {
+    const u = Number(igAccountId); // SQL'ga faqat butun son tushadi
     const [totals, today, week, byAction, daily, autoTotal, autoActive, recent] =
       await Promise.all([
         this.counts(u, ''),
@@ -43,9 +43,9 @@ export class TelegramStatsService {
         this.counts(u, `AND "createdAt" >= now() - interval '7 days'`),
         this.byAction(u),
         this.daily(u),
-        this.automations.count({ where: { userId: u } }),
-        this.automations.count({ where: { userId: u, isActive: true } }),
-        this.logs.find({ where: { userId: u }, order: { createdAt: 'DESC' }, take: 20 }),
+        this.automations.count({ where: { igAccountId: u } }),
+        this.automations.count({ where: { igAccountId: u, isActive: true } }),
+        this.logs.find({ where: { igAccountId: u }, order: { createdAt: 'DESC' }, take: 20 }),
       ]);
 
     return {
@@ -71,38 +71,38 @@ export class TelegramStatsService {
   }
 
   // `extra` — faqat shu fayldagi o'zgarmas SQL qismlari (foydalanuvchi matni emas);
-  // userId esa parametr ($1) sifatida beriladi.
-  private async counts(userId: number, extra: string) {
+  // akkaunt ID esa parametr ($1) sifatida beriladi.
+  private async counts(igAccountId: number, extra: string) {
     const [row] = await this.logs.query(
       `SELECT count(*)::int AS all,
               count(*) FILTER (WHERE type = 'success')::int AS success,
               count(*) FILTER (WHERE type <> 'success')::int AS error
-       FROM logs WHERE "userId" = $1 ${extra}`,
-      [userId],
+       FROM logs WHERE "igAccountId" = $1 ${extra}`,
+      [igAccountId],
     );
     return { all: row.all ?? 0, success: row.success ?? 0, error: row.error ?? 0 };
   }
 
-  private byAction(userId: number) {
+  private byAction(igAccountId: number) {
     return this.logs.query(
       `SELECT action,
               count(*) FILTER (WHERE type = 'success')::int AS success,
               count(*) FILTER (WHERE type <> 'success')::int AS error
-       FROM logs WHERE "userId" = $1 GROUP BY action ORDER BY count(*) DESC`,
-      [userId],
+       FROM logs WHERE "igAccountId" = $1 GROUP BY action ORDER BY count(*) DESC`,
+      [igAccountId],
     );
   }
 
   /** Oxirgi 14 kun — WebApp dagi ustunli grafik uchun */
-  private daily(userId: number) {
+  private daily(igAccountId: number) {
     return this.logs.query(
       `SELECT to_char(("createdAt" AT TIME ZONE '${TZ}')::date, 'YYYY-MM-DD') AS day,
               count(*) FILTER (WHERE type = 'success')::int AS success,
               count(*) FILTER (WHERE type <> 'success')::int AS error
        FROM logs
-       WHERE "userId" = $1 AND "createdAt" >= now() - interval '14 days'
+       WHERE "igAccountId" = $1 AND "createdAt" >= now() - interval '14 days'
        GROUP BY 1 ORDER BY 1`,
-      [userId],
+      [igAccountId],
     );
   }
 }

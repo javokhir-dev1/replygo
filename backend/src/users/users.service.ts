@@ -59,6 +59,10 @@ export class UsersService {
     return (await this.findById(id))!;
   }
 
+  async setActiveIgAccount(id: number, igAccountId: number | null) {
+    await this.repo.update({ id }, { activeIgAccountId: igAccountId });
+  }
+
   async touchLogin(id: number) {
     await this.repo.update({ id }, { lastLoginAt: new Date() });
   }

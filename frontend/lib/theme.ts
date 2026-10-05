@@ -11,6 +11,9 @@ export type ThemeMode = 'system' | 'light' | 'dark';
 
 export const THEME_KEY = 'replygo_theme';
 
+/** Rejim o'zgarganda — barcha boshqaruvlar (chap panel, sozlamalar) sinxron bo'lishi uchun */
+export const THEME_CHANGED = 'replygo:theme-changed';
+
 export function getTheme(): ThemeMode {
   try {
     const v = localStorage.getItem(THEME_KEY);
@@ -30,6 +33,13 @@ export function setTheme(mode: ThemeMode) {
   } catch {
     /* maxfiy rejim — tanlov faqat shu sahifa uchun qoladi */
   }
+  window.dispatchEvent(new Event(THEME_CHANGED));
+}
+
+/** Hozir amalda qaysi rejim ko'rinyapti ("tizim" bo'lsa — qurilma sozlamasi) */
+export function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
+  if (mode !== 'system') return mode;
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 /**

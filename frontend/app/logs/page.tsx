@@ -2,7 +2,7 @@
 
 import { Redirect } from '@/components/Redirect';
 
-/** Eski manzil — Instagram bo'limiga ko'chgan */
+/** Eski manzil — loglar endi dashboard'dagi "So'nggi faoliyat" bo'limida */
 export default function OldLogs() {
-  return <Redirect to="/instagram/logs" />;
+  return <Redirect to="/instagram" />;
 }

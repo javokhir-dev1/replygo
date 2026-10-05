@@ -15,6 +15,8 @@ import { SettingsModule } from './settings/settings.module';
 import { UsersModule } from './users/users.module';
 import { IgAccountsModule } from './ig-accounts/ig-accounts.module';
 import { LegacyMigrationService } from './bootstrap/legacy-migration.service';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -54,6 +56,9 @@ import { LegacyMigrationService } from './bootstrap/legacy-migration.service';
     LogsModule,
     RateLimitModule,
     WebhookModule,
+    DashboardModule,
+    // Lokal Claude CLI bilan post/profil tahlili
+    AiModule,
   ],
   // Bitta-adminli versiyadan ko'chirish (idempotent)
   providers: [LegacyMigrationService],

@@ -6,6 +6,12 @@ import { TelegramService } from '../telegram/telegram.service';
 
 export interface CreateLogInput {
   userId: number;
+  igAccountId?: number | null;
+  automationId?: number | null;
+  mediaId?: string | null;
+  commentId?: string | null;
+  /** Bazaga yozilmaydi — faqat Telegram xabarida qaysi akkaunt ekanini ko'rsatish uchun */
+  accountUsername?: string | null;
   type: string;
   action: string;
   message?: string;
@@ -32,10 +38,11 @@ export class LogsService {
    * bazada qoladi — bildirishnoma logdan muhimroq emas.
    */
   async create(input: CreateLogInput) {
-    const log = await this.repo.save(this.repo.create(input));
+    const { accountUsername, ...data } = input;
+    const log = await this.repo.save(this.repo.create(data));
 
     try {
-      await this.telegram.notifyLog(log);
+      await this.telegram.notifyLog({ ...log, accountUsername });
     } catch (e: any) {
       this.logger.warn(`Telegram bildirishnomasi navbatga qo'shilmadi: ${e.message}`);
     }

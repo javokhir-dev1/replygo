@@ -14,20 +14,34 @@
  */
 :root {
   color-scheme: light;
-  --bg: #fafaf9;
+  --bg: #faf8ff;
   --surface: #ffffff;
-  --sunken: #f4f4f2;
-  --line: #ececea;
-  --line-strong: #dcdcd8;
-  --ink: #0b0b0b;
-  --ink-2: #3d3d3a;
-  --muted: #8b8b86;
-  --accent: #0b0b0b;
+  --sunken: #f3f0fb;
+  --line: #ebe7f5;
+  --line-strong: #dad4ea;
+  --ink: #0e0b16;
+  --ink-2: #3e3850;
+  --muted: #7c7690;
+  /* Brend: binafsha (eski ReplyGo rangi, violet-600).
+     --accent      — to'ldirish (tugma, kalitcha): oq matn bilan 5.7:1
+     --accent-ink  — fon ustidagi matn/ikonka: kun fonida 5.5:1 */
+  --accent: #7c3aed;
+  --accent-2: #8b5cf6;
+  --accent-ink: #7c3aed;
+  --accent-soft: rgba(124, 58, 237, 0.1);
+  --accent-line: rgba(124, 58, 237, 0.28);
   --on-accent: #ffffff;
-  --ring: rgba(11, 11, 11, 0.08);
+  --ring: rgba(124, 58, 237, 0.2);
   --good: #0ca30c;
   --crit: #d03b3b;
   --crit-soft: rgba(208, 59, 59, 0.08);
+  /* Grafiklar (dataviz validator: CVD va kontrast tekshirilgan).
+     javob = brend, DM = yashil, xato = holat qizili (doim yorliq bilan) */
+  --series-reply: #7c3aed;
+  --series-dm: #199e70;
+  --series-error: #d03b3b;
+  /* "Qachon faol" — bir rangli shkala: kam → och, ko'p → to'q */
+  --heat-1: #ede9fe; --heat-2: #c4b5fd; --heat-3: #a78bfa; --heat-4: #7c3aed; --heat-5: #5b21b6;
 }
 
 /*
@@ -39,35 +53,55 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
-    --bg: #0b0b0a;
-    --surface: #131312;
-    --sunken: #1a1a19;
-    --line: #242422;
-    --line-strong: #31312e;
-    --ink: #f4f4f2;
-    --ink-2: #c8c8c3;
-    --muted: #84847e;
-    --accent: #f4f4f2;
-    --on-accent: #0b0b0a;
-    --ring: rgba(244, 244, 242, 0.1);
+    --bg: #0c0a12;
+    --surface: #15121d;
+    --sunken: #1c1826;
+    --line: #262131;
+    --line-strong: #342d43;
+    --ink: #f4f2f9;
+    --ink-2: #cbc6d9;
+    --muted: #8c86a0;
+    /* To'ldirish o'zgarmaydi (oq matn 5.7:1, tun fonida 3.5:1);
+
+       matn/ikonka uchun ochroq violet-400 — tun fonida 7.2:1 */
+    --accent: #7c3aed;
+    --accent-2: #8b5cf6;
+    --accent-ink: #a78bfa;
+    --accent-soft: rgba(167, 139, 250, 0.14);
+    --accent-line: rgba(167, 139, 250, 0.32);
+    --on-accent: #ffffff;
+    --ring: rgba(167, 139, 250, 0.25);
     --crit-soft: rgba(208, 59, 59, 0.14);
+    /* Tun: javob ochroq binafsha; shkala teskari — ko'p → yorqin */
+    --series-reply: #8b5cf6;
+    --heat-1: #2e1065; --heat-2: #4c1d95; --heat-3: #6d28d9; --heat-4: #8b5cf6; --heat-5: #c4b5fd;
   }
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0b0b0a;
-  --surface: #131312;
-  --sunken: #1a1a19;
-  --line: #242422;
-  --line-strong: #31312e;
-  --ink: #f4f4f2;
-  --ink-2: #c8c8c3;
-  --muted: #84847e;
-  --accent: #f4f4f2;
-  --on-accent: #0b0b0a;
-  --ring: rgba(244, 244, 242, 0.1);
+  --bg: #0c0a12;
+  --surface: #15121d;
+  --sunken: #1c1826;
+  --line: #262131;
+  --line-strong: #342d43;
+  --ink: #f4f2f9;
+  --ink-2: #cbc6d9;
+  --muted: #8c86a0;
+  /* To'ldirish o'zgarmaydi (oq matn 5.7:1, tun fonida 3.5:1);
+
+     matn/ikonka uchun ochroq violet-400 — tun fonida 7.2:1 */
+  --accent: #7c3aed;
+  --accent-2: #8b5cf6;
+  --accent-ink: #a78bfa;
+  --accent-soft: rgba(167, 139, 250, 0.14);
+  --accent-line: rgba(167, 139, 250, 0.32);
+  --on-accent: #ffffff;
+  --ring: rgba(167, 139, 250, 0.25);
   --crit-soft: rgba(208, 59, 59, 0.14);
+  /* Tun: javob ochroq binafsha; shkala teskari — ko'p → yorqin */
+  --series-reply: #8b5cf6;
+  --heat-1: #2e1065; --heat-2: #4c1d95; --heat-3: #6d28d9; --heat-4: #8b5cf6; --heat-5: #c4b5fd;
 }
 
 * { box-sizing: border-box; }
@@ -81,13 +115,14 @@ html, body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-::selection { background: var(--ink); color: var(--bg); }
+::selection { background: var(--accent); color: var(--on-accent); }
 
 @layer components {
   .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding-left: 20px; padding-right: 20px; }
+  .wrap-wide { max-width: 1160px; }
 
   /* --- tipografiya --- */
-  .eyebrow { font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-ink); }
   .title { font-size: 24px; line-height: 1.2; font-weight: 600; letter-spacing: -0.025em; }
   .subtitle { font-size: 13px; color: var(--muted); }
   .num { font-variant-numeric: tabular-nums; }
@@ -108,19 +143,19 @@ html, body {
   .btn-primary { background: var(--accent); color: var(--on-accent); }
   .btn-primary:not(:disabled):hover { opacity: .86; }
   .btn-outline { background: var(--surface); color: var(--ink-2); border: 1px solid var(--line-strong); }
-  .btn-outline:not(:disabled):hover { background: var(--sunken); color: var(--ink); }
+  .btn-outline:not(:disabled):hover { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-ink); }
   .btn-ghost { color: var(--ink-2); }
-  .btn-ghost:not(:disabled):hover { background: var(--sunken); color: var(--ink); }
+  .btn-ghost:not(:disabled):hover { background: var(--accent-soft); color: var(--accent-ink); }
   .btn-danger { color: var(--crit); }
   .btn-danger:not(:disabled):hover { background: var(--crit-soft); }
   .icon-btn {
     display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 9px;
     color: var(--muted); transition: background-color .15s, color .15s;
   }
-  .icon-btn:hover { background: var(--sunken); color: var(--ink); }
+  .icon-btn:hover { background: var(--accent-soft); color: var(--accent-ink); }
   .icon-btn.danger:hover { background: var(--crit-soft); color: var(--crit); }
-  .link { font-size: 12.5px; font-weight: 500; color: var(--ink-2); display: inline-flex; align-items: center; gap: 5px; }
-  .link:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  .link { font-size: 12.5px; font-weight: 500; color: var(--accent-ink); display: inline-flex; align-items: center; gap: 5px; }
+  .link:hover { text-decoration: underline; text-underline-offset: 3px; }
 
   /* --- maydonlar --- */
   .field {
@@ -130,7 +165,7 @@ html, body {
     transition: border-color .15s, box-shadow .15s;
   }
   .field::placeholder { color: var(--muted); }
-  .field:focus { border-color: var(--ink-2); box-shadow: 0 0 0 3px var(--ring); }
+  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
   textarea.field { resize: none; line-height: 1.5; }
   .label { display: block; font-size: 12.5px; font-weight: 500; color: var(--ink-2); margin-bottom: 6px; }
 
@@ -141,8 +176,8 @@ html, body {
                   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
                   transition: background-color .15s, color .15s; }
   .seg > button:hover { color: var(--ink); }
-  .seg > button[data-on='true'] { background: var(--surface); color: var(--ink);
-                                  box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.04); }
+  .seg > button[data-on='true'] { background: var(--surface); color: var(--accent-ink);
+                                  box-shadow: 0 0 0 1px var(--accent-line), 0 1px 2px rgba(76,29,149,.08); }
 
   /* --- kalitcha (switch) --- */
   .switch { position: relative; width: 34px; height: 20px; border-radius: 999px; flex-shrink: 0;
@@ -155,12 +190,20 @@ html, body {
 
   /* --- belgilar --- */
   .chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px;
-          border-radius: 999px; border: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
+          border-radius: 999px; border: 1px solid var(--accent-line); background: var(--accent-soft);
+          font-size: 12px; font-weight: 500; color: var(--accent-ink); }
   .tag { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 11px;
-         border-radius: 999px; background: var(--sunken); font-size: 12.5px; color: var(--ink); }
+         border-radius: 999px; background: var(--accent-soft); font-size: 12.5px; font-weight: 500; color: var(--accent-ink); }
   .dot { width: 6px; height: 6px; border-radius: 999px; display: inline-block; flex-shrink: 0; }
 
   .skeleton { background: var(--sunken); border-radius: 10px; animation: pulse 1.6s ease-in-out infinite; }
+}
+
+/* Login / ro'yxatdan o'tish foni: tepadan yumshoq binafsha nur */
+.brand-glow {
+  background:
+    radial-gradient(60% 45% at 50% -5%, rgba(124, 58, 237, 0.16), transparent 70%),
+    var(--bg);
 }
 
 @keyframes pulse { 50% { opacity: .5; } }

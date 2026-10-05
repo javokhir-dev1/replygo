@@ -277,7 +277,8 @@ export class WebhookService {
       this.logger.warn(`Obuna tekshiruvi: avtomatizatsiya #${autoId} topilmadi`);
       return;
     }
-    if (!auto || !auto.isActive || !auto.followCheckEnabled) return;
+    // Payload boshqa akkaunt qoidasiga ishora qilsa (soxta/eski tugma) — e'tiborsiz
+    if (!auto || !auto.isActive || !auto.followCheckEnabled || auto.igAccountId !== r.acc.id) return;
 
     // Profil + obuna holati (foydalanuvchi endi bizga xabar yozgani uchun mavjud)
     let profile: { username?: string; is_user_follow_business?: boolean };
@@ -295,7 +296,7 @@ export class WebhookService {
     if (profile.is_user_follow_business === true) {
       // Obuna tasdiqlandi → asosiy DM yuboramiz (bir marta)
       await this.runOnce(`main:${senderId}:${auto.id}`, 24 * 3600, async () => {
-        const sent = await this.sendMainDm(userId, creds, senderId, auto, name, '');
+        const sent = await this.sendMainDm(userId, { igAccountId: r.acc.id, accountUsername: r.acc.username, automationId: auto.id }, creds, senderId, auto, name, '');
         if (sent) this.logger.log(`✅ Obuna tasdiqlandi, asosiy DM yuborildi @${name}`);
         return sent;
       });
@@ -327,6 +328,7 @@ export class WebhookService {
    */
   private async sendMainDm(
     userId: number,
+    logCtx: { igAccountId: number; accountUsername: string | null; automationId: number },
     creds: IgCredentials,
     recipientId: string,
     auto: any,
@@ -352,6 +354,7 @@ export class WebhookService {
       }
       await this.logs.create({
         userId,
+        ...logCtx,
         type: 'success',
         action: 'Asosiy DM (obunadan keyin)',
         message: dmText.substring(0, 100),
@@ -364,6 +367,7 @@ export class WebhookService {
       this.logger.error(`[Asosiy DM xato] ${igError}`);
       await this.logs.create({
         userId,
+        ...logCtx,
         type: 'error',
         action: 'Asosiy DM (obunadan keyin)',
         message: igError.substring(0, 300),
@@ -392,7 +396,8 @@ export class WebhookService {
 
     this.logger.log(`Yangi komment @${commenterName}: "${commentText}"`);
 
-    const activeAutomations = await this.automations.findActive(userId);
+    // Faqat komment kelgan akkauntning qoidalari (foydalanuvchida bir nechta bo'lishi mumkin)
+    const activeAutomations = await this.automations.findActiveForAccount(r.acc.id);
     if (!activeAutomations.length) return;
 
     // Tizim sozlamalari (baza, system_settings). perUserLimit 0 = cheksiz
@@ -403,6 +408,15 @@ export class WebhookService {
     } = await this.settings.get(userId);
 
     for (const auto of activeAutomations) {
+      // Dashboard uchun: har log qaysi akkaunt/qoida/post/kommentga tegishli
+      const logCtx = {
+        igAccountId: r.acc.id,
+        accountUsername: r.acc.username,
+        automationId: auto.id,
+        mediaId: mediaId ?? null,
+        commentId: commentId ?? null,
+      };
+
       // Post ko'lami
       if (auto.postScope === 'specific') {
         if (!mediaId || !auto.postIds.includes(mediaId)) continue;
@@ -450,6 +464,7 @@ export class WebhookService {
               this.logger.log(`✅ Komment javob @${commenterName}: "${reply.substring(0, 60)}"`);
               await this.logs.create({
                 userId,
+                ...logCtx,
                 type: 'success',
                 action: 'Komment Javob',
                 message: reply.substring(0, 100),
@@ -463,6 +478,7 @@ export class WebhookService {
               this.logger.error(`[Komment javob xato] ${igErr}`);
               await this.logs.create({
                 userId,
+                ...logCtx,
                 type: 'error',
                 action: 'Komment Javob',
                 message: igErr.substring(0, 300),
@@ -503,6 +519,7 @@ export class WebhookService {
               this.logger.log(`📨 Obuna so'rovi yuborildi @${commenterName}`);
               await this.logs.create({
                 userId,
+                ...logCtx,
                 type: 'success',
                 action: 'Obuna so\'rovi',
                 message: askMsg.substring(0, 100),
@@ -516,6 +533,7 @@ export class WebhookService {
               this.logger.error(`[Obuna so'rovi xato] ${igError}`);
               await this.logs.create({
                 userId,
+                ...logCtx,
                 type: 'error',
                 action: 'Obuna so\'rovi',
                 message: igError.substring(0, 300),
@@ -557,6 +575,7 @@ export class WebhookService {
                 this.logger.log(`✅ DM @${commenterName}: "${dmText.substring(0, 60)}"`);
                 await this.logs.create({
                   userId,
+                  ...logCtx,
                   type: 'success',
                   action: 'Kommentdan DM',
                   message: dmText.substring(0, 100),
@@ -570,6 +589,7 @@ export class WebhookService {
                 this.logger.error(`[Kommentdan DM xato] ${igError}`);
                 await this.logs.create({
                   userId,
+                  ...logCtx,
                   type: 'error',
                   action: 'Kommentdan DM',
                   message: igError.substring(0, 300),

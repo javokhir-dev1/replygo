@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Monitor, Sun, Moon, Instagram } from 'lucide-react';
-import { getAccount, connectInstagram, disconnectInstagram, changeUsername, changePassword } from '@/lib/api';
+import { Monitor, Sun, Moon, Instagram, Plus } from 'lucide-react';
+import { getAccounts, selectAccount, connectInstagram, disconnectAccount, changeUsername, changePassword, type IgAccountBrief } from '@/lib/api';
 import { Section } from '@/components/ui';
-import { notifyAccountChanged } from '@/components/IgAccountBadge';
-import { getTheme, setTheme, type ThemeMode } from '@/lib/theme';
+import { notifyAccountChanged, Avatar } from '@/components/IgAccountBadge';
+import { getTheme, setTheme, THEME_CHANGED, type ThemeMode } from '@/lib/theme';
 import { getUsername, setToken } from '@/lib/auth';
 
 /**
@@ -18,15 +18,22 @@ import { getUsername, setToken } from '@/lib/auth';
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,32}$/;
 
 export default function SettingsPage() {
-  const [account, setAccount] = useState<any>(null);
+  const [igData, setIgData] = useState<{ accounts: IgAccountBrief[]; canConnect: boolean } | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [welcome, setWelcome] = useState(false);
-  const [igBusy, setIgBusy] = useState(false);
+  const [igBusy, setIgBusy] = useState<number | 'add' | null>(null);
   const [theme, setThemeState] = useState<ThemeMode>('system');
+
+  // Chap paneldagi kun/tun tugmasi bilan sinxron
+  useEffect(() => {
+    const sync = () => setThemeState(getTheme());
+    window.addEventListener(THEME_CHANGED, sync);
+    return () => window.removeEventListener(THEME_CHANGED, sync);
+  }, []);
 
   useEffect(() => {
     setThemeState(getTheme());
-    getAccount().then(setAccount).catch(() => setAccount({ connected: false }));
+    loadAccounts();
 
     // Instagram OAuth'dan qaytish (?ig=connected | ?ig_error=...) va yangi foydalanuvchi.
     // useSearchParams o'rniga window — statik build'da Suspense talab qilmasin.
@@ -37,30 +44,45 @@ export default function SettingsPage() {
     if (q.toString()) window.history.replaceState(null, '', '/instagram/settings');
   }, []);
 
+  const loadAccounts = () =>
+    getAccounts().then(setIgData).catch(() => setIgData({ accounts: [], canConnect: false }));
+
+  /** Yangi akkaunt ulash yoki mavjudini qayta ulash (token yangilanadi) — Instagram'ga o'tadi */
   const onConnectIg = async () => {
-    setIgBusy(true);
+    setIgBusy('add');
     setNotice(null);
     try {
       const { url } = await connectInstagram();
-      window.location.href = url; // Instagram'ga — qaytganda ?ig=connected bilan keladi
+      window.location.href = url; // qaytganda ?ig=connected bilan keladi
     } catch (e: any) {
       setNotice({ ok: false, text: e.message });
-      setIgBusy(false);
+      setIgBusy(null);
     }
   };
 
-  const onDisconnectIg = async () => {
-    if (!confirm(`@${account?.username ?? 'akkaunt'} uzilsinmi? Bot bu akkauntga javob berishni to'xtatadi.`)) return;
-    setIgBusy(true);
+  const onSelectIg = async (a: IgAccountBrief) => {
+    setIgBusy(a.id);
     try {
-      await disconnectInstagram();
-      setAccount({ connected: false, canConnect: account?.canConnect });
-      setNotice({ ok: true, text: 'Instagram uzildi' });
+      await selectAccount(a.id);
+      window.location.reload(); // chap panel, qoidalar va dashboard yangi akkaunt bo'yicha
+    } catch (e: any) {
+      setNotice({ ok: false, text: e.message });
+      setIgBusy(null);
+    }
+  };
+
+  const onDisconnectIg = async (a: IgAccountBrief) => {
+    if (!confirm(`@${a.username ?? 'akkaunt'} uzilsinmi? Bot bu akkauntga javob berishni to'xtatadi. Qoidalar va statistika saqlanadi — qayta ulasangiz qaytadi.`)) return;
+    setIgBusy(a.id);
+    try {
+      await disconnectAccount(a.id);
+      setNotice({ ok: true, text: `@${a.username ?? 'akkaunt'} uzildi` });
+      await loadAccounts();
       notifyAccountChanged();
     } catch (e: any) {
       setNotice({ ok: false, text: e.message });
     } finally {
-      setIgBusy(false);
+      setIgBusy(null);
     }
   };
 
@@ -78,7 +100,7 @@ export default function SettingsPage() {
         <p className="subtitle mt-1.5">Akkauntlar va ko&apos;rinish.</p>
       </div>
 
-      {welcome && !account?.connected && (
+      {welcome && igData && !igData.accounts.length && (
         <div className="panel mt-6 p-5">
           <p className="text-[14px] font-medium">Xush kelibsiz! Oxirgi qadam qoldi</p>
           <p className="subtitle mt-1">Bot ishlashi uchun Instagram akkauntingizni pastdagi «Instagram bilan ulash» orqali ulang.</p>
@@ -94,36 +116,52 @@ export default function SettingsPage() {
       <div className="mt-8 hairline">
           <Section
             title="Instagram"
-            desc="Bot shu akkauntdagi kommentlarga javob beradi va DM yuboradi."
+            desc="Bir nechta akkaunt ulash mumkin. Qoidalar va statistika tanlangan akkaunt bo'yicha ko'rsatiladi."
           >
-            {!account ? (
+            {!igData ? (
               <div className="skeleton h-16" />
-            ) : account.connected ? (
-              <div className="panel p-4 flex items-center gap-4">
-                {account.profile_picture_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={account.profile_picture_url} alt="" className="w-11 h-11 rounded-full object-cover" />
-                ) : (
-                  <span className="grid place-items-center w-11 h-11 rounded-full bg-[var(--sunken)]">
-                    <Instagram size={18} strokeWidth={1.75} className="text-[var(--muted)]" />
-                  </span>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-[14.5px] font-medium truncate">@{account.username ?? account.igUserId}</p>
-                  <p className="text-[12.5px] text-[var(--muted)] mt-0.5 flex items-center gap-1.5 num">
-                    <span className="dot" style={{ background: account.ok === false || account.status === 'error' ? 'var(--crit)' : 'var(--good)' }} />
-                    {account.ok === false || account.status === 'error'
-                      ? 'Token ishlamayapti — qayta ulang'
-                      : [
-                          account.followers_count != null && `${account.followers_count} obunachi`,
-                        ].filter(Boolean).join(' · ') || 'Ulangan'}
-                  </p>
+            ) : igData.accounts.length ? (
+              <>
+                <div className="panel rows">
+                  {igData.accounts.map((a) => {
+                    const broken = a.status === 'error';
+                    return (
+                      <div key={a.id} className="flex items-center gap-3.5 px-4 py-3">
+                        <Avatar url={a.profile_picture_url} size={38} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[14px] font-medium truncate flex items-center gap-2">
+                            @{a.username ?? a.igUserId}
+                            {a.active && <span className="chip !h-5 !text-[11px]">Tanlangan</span>}
+                          </p>
+                          <p className="text-[12.5px] text-[var(--muted)] mt-0.5 flex items-center gap-1.5 num">
+                            <span className="dot" style={{ background: broken ? 'var(--crit)' : 'var(--good)' }} />
+                            {broken
+                              ? 'Token ishlamayapti — qayta ulang'
+                              : a.followers_count != null
+                                ? `${Number(a.followers_count).toLocaleString('uz-UZ')} obunachi`
+                                : 'Ulangan'}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {broken && igData.canConnect && (
+                            <button onClick={onConnectIg} disabled={igBusy !== null} className="btn btn-outline">Qayta ulash</button>
+                          )}
+                          {!a.active && (
+                            <button onClick={() => onSelectIg(a)} disabled={igBusy !== null} className="btn btn-ghost">
+                              {igBusy === a.id ? 'Tanlanmoqda…' : 'Tanlash'}
+                            </button>
+                          )}
+                          <button onClick={() => onDisconnectIg(a)} disabled={igBusy !== null} className="btn btn-danger">Uzish</button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                {(account.ok === false || account.status === 'error') && account.canConnect && (
-                  <button onClick={onConnectIg} disabled={igBusy} className="btn btn-outline">Qayta ulash</button>
-                )}
-                <button onClick={onDisconnectIg} disabled={igBusy} className="btn btn-danger">Uzish</button>
-              </div>
+                <button onClick={onConnectIg} disabled={igBusy !== null || !igData.canConnect} className="btn btn-outline mt-3">
+                  <Plus size={15} strokeWidth={2} />
+                  {igBusy === 'add' ? "Yo'naltirilmoqda…" : 'Yana akkaunt ulash'}
+                </button>
+              </>
             ) : (
               <div className="panel p-5">
                 <p className="text-[14px] font-medium">Akkaunt ulanmagan</p>
@@ -131,17 +169,20 @@ export default function SettingsPage() {
                   Instagram professional (Business yoki Creator) akkaunt kerak. Siz Instagram sahifasiga
                   o&apos;tasiz, ruxsat berasiz va shu yerga qaytasiz — parolingiz bizga kelmaydi.
                 </p>
-                <button onClick={onConnectIg} disabled={igBusy || !account.canConnect} className="btn btn-primary mt-4">
+                <button onClick={onConnectIg} disabled={igBusy !== null || !igData.canConnect} className="btn btn-primary mt-4">
                   <Instagram size={15} strokeWidth={1.75} />
-                  {igBusy ? 'Yo\'naltirilmoqda…' : 'Instagram bilan ulash'}
+                  {igBusy === 'add' ? "Yo'naltirilmoqda…" : 'Instagram bilan ulash'}
                 </button>
-                {!account.canConnect && (
-                  <p className="text-[12.5px] text-[var(--crit)] mt-3">
-                    Server tomonida Instagram ilovasi sozlanmagan (INSTAGRAM_APP_ID). Administratorga murojaat qiling.
-                  </p>
-                )}
               </div>
             )}
+            {igData && !igData.canConnect && (
+              <p className="text-[12.5px] text-[var(--crit)] mt-3">
+                Server tomonida Instagram ilovasi sozlanmagan (INSTAGRAM_APP_ID). Administratorga murojaat qiling.
+              </p>
+            )}
+            <p className="subtitle !text-[12px] mt-3">
+              Boshqa akkaunt ulashda Instagram avval kirgan akkauntni taklif qilsa, u yerda «Siz emasmisiz?» orqali almashtiring.
+            </p>
           </Section>
 
           <Section title="Akkaunt" desc="ReplyGo'ga kirish uchun login va parol. Instagram akkauntidan alohida.">

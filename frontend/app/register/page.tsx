@@ -7,6 +7,7 @@ import { Loader2 } from 'lucide-react';
 import { register } from '@/lib/api';
 import { setToken, hasValidToken } from '@/lib/auth';
 import { Mark } from '@/components/Mark';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 const USERNAME_RE = /^[a-zA-Z0-9_.]{3,32}$/;
 
@@ -50,7 +51,8 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-5 py-12">
+    <div className="brand-glow relative min-h-screen flex items-center justify-center px-5 py-12">
+      <ThemeToggle className="absolute top-4 right-4" />
       <div className="w-full max-w-[340px]">
         <Mark size={32} />
         <h1 className="title mt-8">Akkaunt yaratish</h1>

@@ -110,7 +110,26 @@ export const getInstagramPosts = () => req('/api/instagram/posts');
 export const getAccount = () => req('/api/instagram/account');
 /** OAuth manzilini oladi — chaqiruvchi brauzerni shu yerga yo'naltiradi */
 export const connectInstagram = (): Promise<{ url: string }> => req('/api/instagram/connect', { method: 'POST' });
-export const disconnectInstagram = () => req('/api/instagram/connection', { method: 'DELETE' });
+
+/** Ulangan Instagram akkauntlar (bir nechta bo'lishi mumkin) */
+export interface IgAccountBrief {
+  id: number;
+  igUserId: string;
+  username: string | null;
+  profile_picture_url: string | null;
+  followers_count: number | null;
+  status: string;
+  lastError: string | null;
+  active: boolean;
+}
+export const getAccounts = (): Promise<{ accounts: IgAccountBrief[]; canConnect: boolean }> => req('/api/instagram/accounts');
+/** Akkauntni almashtirish — panel shu akkaunt bo'yicha ishlaydi */
+export const selectAccount = (id: number) => req(`/api/instagram/accounts/${id}/select`, { method: 'POST' });
+/** Uzish — qoidalar va statistika saqlanadi, qayta ulanganda qaytadi */
+export const disconnectAccount = (id: number) => req(`/api/instagram/accounts/${id}`, { method: 'DELETE' });
+
+export type DashboardRange = 'today' | '7d' | '30d';
+export const getDashboard = (range: DashboardRange) => req(`/api/dashboard?range=${range}`);
 
 export interface TelegramChatInfo { chatId: string; title: string | null; isActive: boolean }
 export const telegramLink = (): Promise<{ url: string; expiresInSec: number }> => req('/api/telegram/link', { method: 'POST' });
@@ -150,3 +169,51 @@ export const getSettings = (): Promise<SettingsResponse> => req('/api/settings')
 export const updateSettings = (data: Partial<RuntimeSettings>): Promise<SettingsResponse> =>
   req('/api/settings', { method: 'PUT', body: JSON.stringify(data) });
 export const resetSettings = (): Promise<SettingsResponse> => req('/api/settings', { method: 'DELETE' });
+
+/* ------------------------------ Postlarim ------------------------------ */
+
+export type MediaKind = 'REELS' | 'FEED' | 'STORY';
+export interface MediaItem {
+  id: string;
+  kind: MediaKind;
+  mediaType: string; // IMAGE | VIDEO | CAROUSEL_ALBUM
+  caption: string | null;
+  thumbnail: string | null;
+  permalink: string | null;
+  timestamp: string;
+  likeCount: number | null;
+  commentsCount: number | null;
+  /** views, reach, likes, comments, shares, saved, total_interactions, ig_reels_avg_watch_time (ms) ... */
+  insights: Record<string, number> | null;
+}
+
+export const getMedia = (after?: string): Promise<{ connected: boolean; items: MediaItem[]; after: string | null }> =>
+  req(`/api/instagram/media?limit=24${after ? `&after=${encodeURIComponent(after)}` : ''}`);
+export const getStories = (): Promise<{ connected: boolean; items: MediaItem[] }> => req('/api/instagram/stories');
+export const getIgOverview = (days: number) => req(`/api/instagram/overview?days=${days}`);
+
+/* ------------------------- AI tahlil (Claude CLI) ------------------------- */
+
+export type AiStatus = 'queued' | 'running' | 'done' | 'error';
+export interface AiAnalysis {
+  id: number;
+  kind: 'media' | 'profile';
+  mediaId: string | null;
+  status: AiStatus;
+  stage: string | null;
+  result: any;
+  meta: any;
+  error: string | null;
+  model: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+export const getAiStatus = (): Promise<{ enabled: boolean }> => req('/api/ai/status');
+export const startMediaAnalysis = (mediaId: string): Promise<AiAnalysis> =>
+  req(`/api/ai/media/${encodeURIComponent(mediaId)}`, { method: 'POST' });
+export const startProfileAnalysis = (): Promise<AiAnalysis> => req('/api/ai/profile', { method: 'POST' });
+export const getAnalysis = (id: number): Promise<AiAnalysis> => req(`/api/ai/analyses/${id}`);
+export const listAnalyses = (kind: 'media' | 'profile', mediaId?: string): Promise<AiAnalysis[]> =>
+  req(`/api/ai/analyses?kind=${kind}${mediaId ? `&mediaId=${encodeURIComponent(mediaId)}` : ''}`);

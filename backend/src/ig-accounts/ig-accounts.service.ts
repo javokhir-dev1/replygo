@@ -1,9 +1,11 @@
-import { ConflictException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Not, Repository } from 'typeorm';
 import axios from 'axios';
 import { IgAccount } from './entities/ig-account.entity';
+import { IgAccountSnapshot } from './entities/ig-account-snapshot.entity';
+import { UsersService } from '../users/users.service';
 import { seal, open } from '../common/secret-box';
 import type { IgCredentials } from '../instagram/instagram.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -29,13 +31,19 @@ export class IgAccountsService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly config: ConfigService,
     @InjectRepository(IgAccount) private readonly repo: Repository<IgAccount>,
+    @InjectRepository(IgAccountSnapshot) private readonly snaps: Repository<IgAccountSnapshot>,
     private readonly telegram: TelegramService,
+    private readonly users: UsersService,
   ) {}
 
   onModuleInit() {
     // Ishga tushgach biroz kutib birinchi tekshiruv (baza va boshqa modullar tayyor bo'lsin)
-    setTimeout(() => void this.refreshDue(), 60_000).unref();
-    this.timer = setInterval(() => void this.refreshDue(), REFRESH_EVERY_MS);
+    const tick = async () => {
+      await this.refreshDue();
+      await this.snapshotDue();
+    };
+    setTimeout(() => void tick(), 60_000).unref();
+    this.timer = setInterval(() => void tick(), REFRESH_EVERY_MS);
     this.timer.unref();
   }
 
@@ -43,12 +51,50 @@ export class IgAccountsService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
   }
 
-  forUser(userId: number) {
-    return this.repo.findOne({ where: { userId } });
+  /** Foydalanuvchining ulangan (uzilmagan) akkauntlari, ulangan tartibida */
+  listForUser(userId: number) {
+    return this.repo.find({ where: { userId, status: Not('disconnected') }, order: { connectedAt: 'ASC' } });
   }
 
+  /** Foydalanuvchining bitta akkaunti — begonaniki bo'lsa 404 */
+  async getForUser(userId: number, id: number) {
+    const acc = await this.repo.findOne({ where: { id, userId, status: Not('disconnected') } });
+    if (!acc) throw new NotFoundException('Akkaunt topilmadi');
+    return acc;
+  }
+
+  /**
+   * Panelda tanlangan akkaunt. Tanlov yo'q yoki eskirgan bo'lsa — birinchi
+   * ulangan akkaunt tanlanadi va eslab qolinadi. Umuman akkaunt bo'lmasa null.
+   */
+  async activeFor(userId: number): Promise<IgAccount | null> {
+    const user = await this.users.findById(userId);
+    const list = await this.listForUser(userId);
+    if (!list.length) {
+      if (user?.activeIgAccountId) await this.users.setActiveIgAccount(userId, null);
+      return null;
+    }
+    const chosen = list.find((a) => a.id === user?.activeIgAccountId) ?? list[0];
+    if (chosen.id !== user?.activeIgAccountId) await this.users.setActiveIgAccount(userId, chosen.id);
+    return chosen;
+  }
+
+  /** Faol akkaunt shart bo'lgan amallar uchun (qoida yaratish va h.k.) */
+  async requireActive(userId: number): Promise<IgAccount> {
+    const acc = await this.activeFor(userId);
+    if (!acc) throw new BadRequestException('Avval Instagram akkauntni ulang (Sozlamalar)');
+    return acc;
+  }
+
+  async select(userId: number, id: number) {
+    const acc = await this.getForUser(userId, id);
+    await this.users.setActiveIgAccount(userId, acc.id);
+    return acc;
+  }
+
+  /** Webhook uchun: faqat ulangan (uzilmagan) akkaunt */
   byIgUserId(igUserId: string) {
-    return this.repo.findOne({ where: { igUserId: String(igUserId) } });
+    return this.repo.findOne({ where: { igUserId: String(igUserId), status: Not('disconnected') } });
   }
 
   /** InstagramService chaqiruvlari uchun ochilgan token */
@@ -56,31 +102,47 @@ export class IgAccountsService implements OnModuleInit, OnModuleDestroy {
     return { token: open(acc.tokenEnc), accountId: acc.igUserId };
   }
 
+  /**
+   * OAuth natijasini saqlaydi.
+   *   - shu foydalanuvchida bu akkaunt bor (yoki uzilgan) → token yangilanadi, qayta faollashadi
+   *   - boshqa foydalanuvchida ULANGAN → rad etiladi
+   *   - boshqa foydalanuvchida uzilgan → u eski bog'lanish olib tashlanadi, yangisi yaratiladi
+   */
   async save(
     userId: number,
     info: { igUserId: string; username?: string | null; picture?: string | null; token: string; expiresInSec?: number | null },
   ): Promise<IgAccount> {
     const igUserId = String(info.igUserId);
-    const owner = await this.byIgUserId(igUserId);
-    if (owner && owner.userId !== userId) {
-      throw new ConflictException('Bu Instagram akkaunt boshqa ReplyGo foydalanuvchisiga ulangan.');
+    let acc = await this.repo.findOne({ where: { igUserId } });
+    if (acc && acc.userId !== userId) {
+      if (acc.status !== 'disconnected') {
+        throw new ConflictException('Bu Instagram akkaunt boshqa ReplyGo foydalanuvchisiga ulangan.');
+      }
+      await this.repo.remove(acc); // eski egasining qoidalari unda qoladi, akkauntga bog'lanmaydi
+      acc = null;
     }
 
-    const existing = (await this.forUser(userId)) ?? this.repo.create({ userId });
-    existing.igUserId = igUserId;
-    existing.username = info.username ?? existing.username ?? null;
-    existing.profilePictureUrl = info.picture ?? existing.profilePictureUrl ?? null;
-    existing.tokenEnc = seal(info.token);
-    existing.tokenExpiresAt = info.expiresInSec ? new Date(Date.now() + info.expiresInSec * 1000) : null;
-    existing.tokenRefreshedAt = new Date();
-    existing.status = 'active';
-    existing.lastError = null;
-    return this.repo.save(existing);
+    acc = acc ?? this.repo.create({ userId, igUserId });
+    acc.username = info.username ?? acc.username ?? null;
+    acc.profilePictureUrl = info.picture ?? acc.profilePictureUrl ?? null;
+    acc.tokenEnc = seal(info.token);
+    acc.tokenExpiresAt = info.expiresInSec ? new Date(Date.now() + info.expiresInSec * 1000) : null;
+    acc.tokenRefreshedAt = new Date();
+    acc.status = 'active';
+    acc.lastError = null;
+    const saved = await this.repo.save(acc);
+    await this.users.setActiveIgAccount(userId, saved.id); // yangi ulangan akkaunt — tanlanadi
+    return saved;
   }
 
-  async remove(userId: number): Promise<IgAccount | null> {
-    const acc = await this.forUser(userId);
-    if (acc) await this.repo.remove(acc);
+  /** Uzish: token o'chiriladi, qator qoladi (qoidalar va statistika saqlanadi) */
+  async disconnect(userId: number, id: number): Promise<IgAccount> {
+    const acc = await this.getForUser(userId, id);
+    acc.status = 'disconnected';
+    acc.tokenEnc = '';
+    acc.tokenExpiresAt = null;
+    await this.repo.save(acc);
+    await this.activeFor(userId); // faol bo'lgan bo'lsa — boshqasiga o'tadi
     return acc;
   }
 
@@ -125,6 +187,39 @@ export class IgAccountsService implements OnModuleInit, OnModuleDestroy {
         )
         .catch(() => undefined);
     }
+  }
+
+  /** Toshkent vaqti bo'yicha bugungi sana (YYYY-MM-DD) */
+  private today(): string {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tashkent' });
+  }
+
+  /** Har akkaunt uchun kuniga bitta snapshot (obunachilar o'sishi grafigi uchun) */
+  async snapshotDue() {
+    const day = this.today();
+    for (const acc of await this.repo.find({ where: { status: 'active' } })) {
+      if (await this.snaps.findOne({ where: { igAccountId: acc.id, day } })) continue;
+      try {
+        const res = await axios.get(`${GRAPH}/v21.0/${acc.igUserId}`, {
+          params: { fields: 'followers_count,media_count,username,profile_picture_url', access_token: open(acc.tokenEnc) },
+          timeout: 20_000,
+        });
+        await this.recordStats(acc, res.data);
+        await this.snaps.save({ igAccountId: acc.id, day, followersCount: res.data.followers_count ?? null, mediaCount: res.data.media_count ?? null });
+      } catch (e: any) {
+        this.logger.warn(`Snapshot olinmadi @${acc.username}: ${e?.response?.data?.error?.message || e.message}`);
+      }
+    }
+  }
+
+  /** Instagram'dan kelgan ko'rsatkichlarni keshga yozadi (ro'yxatda API'siz ko'rsatish uchun) */
+  async recordStats(acc: IgAccount, info: { followers_count?: number; media_count?: number; username?: string; profile_picture_url?: string }) {
+    const patch: Partial<IgAccount> = {};
+    if (info.followers_count != null) patch.followersCount = info.followers_count;
+    if (info.media_count != null) patch.mediaCount = info.media_count;
+    if (info.username) patch.username = info.username;
+    if (info.profile_picture_url) patch.profilePictureUrl = info.profile_picture_url;
+    if (Object.keys(patch).length) await this.repo.update({ id: acc.id }, patch);
   }
 
   /** Token ishlayotganini tekshirish uchun (panel holati) */

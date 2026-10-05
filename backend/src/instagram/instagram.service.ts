@@ -220,3 +220,9 @@ export class InstagramService {
     return res.data.data as any[];
   }
 }
+
+/**
+ * Rate-limit interceptor'lari bilan umumiy axios klienti — boshqa Instagram
+ * servislari (masalan statistika) ham 429 himoyasidan foydalanishi uchun.
+ */
+export { http as igHttp, BASE_URL as IG_BASE_URL };

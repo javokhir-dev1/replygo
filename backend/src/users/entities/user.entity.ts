@@ -20,6 +20,11 @@ export class User {
   @Column({ type: 'int', default: 0 })
   tokenVersion: number;
 
+  // Panelda hozir tanlangan Instagram akkaunt (bir nechtasi bo'lishi mumkin).
+  // Qoidalar, statistika va postlar shu akkaunt bo'yicha ko'rsatiladi.
+  @Column({ type: 'int', nullable: true })
+  activeIgAccountId: number | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

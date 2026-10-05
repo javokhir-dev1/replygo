@@ -11,8 +11,8 @@ export default function TelegramHome() {
       <p className="subtitle mt-1.5">Telegram bo&apos;limi ustida ish ketyapti.</p>
 
       <div className="panel mt-10 px-6 py-16 text-center">
-        <span className="inline-grid place-items-center w-12 h-12 rounded-full bg-[var(--sunken)]">
-          <Send size={20} strokeWidth={1.5} className="text-[var(--muted)]" />
+        <span className="inline-grid place-items-center w-12 h-12 rounded-full bg-[var(--accent-soft)]">
+          <Send size={20} strokeWidth={1.5} className="text-[var(--accent-ink)]" />
         </span>
         <p className="text-[15px] font-medium mt-5">Bu yerda Telegram avtomatizatsiyasi bo&apos;ladi</p>
         <p className="subtitle mt-1.5 max-w-sm mx-auto">

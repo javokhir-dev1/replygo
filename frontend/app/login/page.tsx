@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Mark } from '@/components/Mark';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { login } from '@/lib/api';
 import { setToken, hasValidToken } from '@/lib/auth';
 
@@ -38,7 +39,8 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-5">
+    <div className="brand-glow relative min-h-screen flex items-center justify-center px-5">
+      <ThemeToggle className="absolute top-4 right-4" />
       <div className="w-full max-w-[340px]">
         <Mark size={32} />
         <h1 className="title mt-8">Xush kelibsiz</h1>

@@ -10,6 +10,11 @@ export class Automation {
   @Column({ type: 'int', nullable: true })
   userId: number | null;
 
+  // Qaysi Instagram akkaunt uchun (foydalanuvchida bir nechta bo'lishi mumkin)
+  @Index()
+  @Column({ type: 'int', nullable: true })
+  igAccountId: number | null;
+
   @Column()
   name: string;
 

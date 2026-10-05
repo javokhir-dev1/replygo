@@ -30,10 +30,34 @@ export class LegacyMigrationService implements OnApplicationBootstrap {
   async onApplicationBootstrap() {
     try {
       await this.run();
+      await this.linkToAccounts();
     } catch (e: any) {
       // Ko'chirish xatosi butun backend'ni yiqitmasin — faqat log
       this.logger.error(`Ko'chirish bajarilmadi: ${e.message}`);
     }
+  }
+
+  /**
+   * Bir nechta akkauntga o'tish: akkauntsiz qoidalar va loglar egasining
+   * birinchi ulangan akkauntiga biriktiriladi; tanlangan akkaunt belgilanadi.
+   * Idempotent — bog'lanmagan qatorlar qolmaguncha ishlaydi, keyin hech narsa qilmaydi.
+   */
+  private async linkToAccounts() {
+    for (const table of ['automations', 'logs']) {
+      const res = await this.ds.query(
+        `UPDATE "${table}" t SET "igAccountId" = a.id
+           FROM (SELECT DISTINCT ON ("userId") id, "userId" FROM ig_accounts ORDER BY "userId", "connectedAt") a
+          WHERE t."igAccountId" IS NULL AND t."userId" = a."userId"`,
+      );
+      const n = Array.isArray(res) ? res[1] : 0;
+      if (n) this.logger.log(`${table}: ${n} ta qator akkauntga biriktirildi`);
+    }
+    await this.ds.query(
+      `UPDATE users u SET "activeIgAccountId" = a.id
+         FROM (SELECT DISTINCT ON ("userId") id, "userId" FROM ig_accounts
+                WHERE status <> 'disconnected' ORDER BY "userId", "connectedAt") a
+        WHERE u."activeIgAccountId" IS NULL AND u.id = a."userId"`,
+    );
   }
 
   private async run() {
@@ -57,7 +81,7 @@ export class LegacyMigrationService implements OnApplicationBootstrap {
     // .env dagi Instagram → admin ulanishi (agar hali hech kimda bo'lmasa)
     const token = this.config.get<string>('IG_ACCESS_TOKEN');
     const igUserId = this.config.get<string>('IG_ACCOUNT_ID');
-    if (token && igUserId && !(await this.accounts.forUser(admin.id)) && !(await this.accounts.byIgUserId(igUserId))) {
+    if (token && igUserId && !(await this.accounts.listForUser(admin.id)).length && !(await this.accounts.byIgUserId(igUserId))) {
       await this.accounts.save(admin.id, { igUserId, token, username: null, expiresInSec: null });
       this.logger.log(`🔗 .env dagi Instagram (${igUserId}) ${admin.username} ga ulandi`);
     }

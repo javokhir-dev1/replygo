@@ -1,23 +1,22 @@
 /**
- * ReplyGo belgisi: siyoh kvadrat ichida "javob" o'qi.
- * Rang tokenlardan olinadi — tungi rejimda o'zi teskari bo'ladi.
+ * ReplyGo belgisi: "R" harfi va chat pufakchasi (brend gradienti #7C3AED → #8B5CF6).
+ *
+ * Manba: public/brand/replygo-logo.png — shaffof fon, shuning uchun kun va tun
+ * rejimida bir xil ishlaydi. Favicon va Apple ikonka app/ papkasida
+ * (icon.png, apple-icon.png, favicon.ico) — Next.js ularni o'zi ulaydi.
  */
 export function Mark({ size = 22 }: { size?: number }) {
   return (
-    <span
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/brand/replygo-logo.png"
+      alt=""
       aria-hidden
-      className="inline-grid place-items-center shrink-0"
-      style={{ width: size, height: size, borderRadius: size * 0.3, background: 'var(--accent)' }}
-    >
-      <svg width={size * 0.55} height={size * 0.55} viewBox="0 0 24 24" fill="none">
-        <path
-          d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"
-          stroke="var(--on-accent)"
-          strokeWidth="2.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
+      width={size}
+      height={size}
+      className="inline-block shrink-0 select-none"
+      style={{ width: size, height: size }}
+      draggable={false}
+    />
   );
 }

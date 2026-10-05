@@ -3,15 +3,19 @@ import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, Index } from 
 /**
  * Foydalanuvchiga ulangan Instagram professional akkaunti.
  *
- * Bitta foydalanuvchi — bitta akkaunt; bitta Instagram akkaunt — faqat bitta
- * foydalanuvchida (aks holda webhook kimga tegishli ekani noaniq bo'lardi).
+ * Bitta foydalanuvchida bir nechta akkaunt bo'lishi mumkin; lekin bitta
+ * Instagram akkaunt — faqat bitta foydalanuvchida (aks holda webhook kimga
+ * tegishli ekani noaniq bo'lardi).
+ *
+ * Uzilganda qator o'chirilmaydi (status = 'disconnected', token tozalanadi):
+ * qoidalar va statistika saqlanadi, qayta ulanganda hammasi joyiga qaytadi.
  */
 @Entity('ig_accounts')
 export class IgAccount {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Index({ unique: true })
+  @Index()
   @Column({ type: 'int' })
   userId: number;
 
@@ -27,9 +31,18 @@ export class IgAccount {
   @Column({ type: 'text', nullable: true })
   profilePictureUrl: string | null;
 
-  // AES-256-GCM bilan shifrlangan uzoq muddatli token (common/secret-box)
+  // AES-256-GCM bilan shifrlangan uzoq muddatli token (common/secret-box).
+  // Uzilgan akkauntda bo'sh satr.
   @Column({ type: 'text' })
   tokenEnc: string;
+
+  // Ro'yxatda har safar Instagram API'ga bormaslik uchun keshlangan qiymatlar
+  // (kunlik snapshot va akkaunt tekshiruvida yangilanadi)
+  @Column({ type: 'int', nullable: true })
+  followersCount: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  mediaCount: number | null;
 
   // null = noma'lum (masalan .env dan ko'chirilgan eski token)
   @Column({ type: 'timestamptz', nullable: true })
@@ -38,7 +51,7 @@ export class IgAccount {
   @Column({ type: 'timestamptz', nullable: true })
   tokenRefreshedAt: Date | null;
 
-  // 'active' | 'error' — error bo'lsa foydalanuvchi qayta ulashi kerak
+  // 'active' | 'error' | 'disconnected' — error bo'lsa qayta ulash kerak
   @Column({ type: 'varchar', default: 'active' })
   status: string;
 
